@@ -1,0 +1,12 @@
+
+
+# Base images used to create the builder
+[build]
+image = "quay.io/zncdatadev-test/base-build:rocky-9"
+[run]
+[[run.images]]
+image = "quay.io/zncdatadev-test/base-run:rocky-9"
+
+[[targets]]
+  os = "linux"
+  arch = "arm64"

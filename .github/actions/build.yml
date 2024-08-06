@@ -1,0 +1,12 @@
+name: build
+description: oci image build
+inputs:
+  product-name:
+    description: 'The name of the product'
+    required: true
+  product-version:
+    description: 'The version of the product'
+    required: true
+outputs:
+  image-reference:
+    description: 'The image reference'
