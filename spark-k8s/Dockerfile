@@ -24,8 +24,12 @@ configurations {
 }
 
 dependencies {
-    toCopy 'org.apache.spark:spark-hadoop-cloud_2.13:${PRODUCT_VERSION}'
-    toCopy 'com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.14.2'
+    toCopy('org.apache.spark:spark-hadoop-cloud_2.13:${PRODUCT_VERSION}') {
+        exclude group: 'org.slf4j', module: 'slf4j-api'
+    }
+    toCopy('com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.14.2') {
+        exclude group: 'org.slf4j', module: 'slf4j-api'
+    }
 }
 
 task download(type: Copy) {
