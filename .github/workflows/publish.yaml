@@ -5,11 +5,12 @@ on:
   push:
     branches:
       - main
+      - test-hbase
 
 
 jobs:
   prepare:
-    if: github.repository_owner == 'zncdatadev'
+    # if: github.repository_owner == 'zncdatadev'
     name: Prepare Updated data
     uses: ./.github/workflows/reusable-prepare.yaml
 
@@ -19,7 +20,7 @@ jobs:
       - prepare
     uses: ./.github/workflows/reusable-build-publish.yaml
     with:
-      registry: quay.io/zncdatadev
+      registry: quay.io/huagang
       kubedoop_version: 0.0.0-dev
       targets: ${{ matrix.targets }}
       push: true

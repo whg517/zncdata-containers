@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 # check=error=true
 
+
 ## stage: hbase-builder
 FROM zncdatadev/image/java-devel AS java-builder
 
@@ -34,7 +35,7 @@ WORKDIR /build
 COPY /kubedoop/ /build/
 
 RUN <<EOF
-    set -e
+    set -ex
     mkdir -p /build/hbase-src
     pushd /build/hbase-src
     curl -sSfL \
@@ -47,7 +48,6 @@ RUN <<EOF
     tar -xzf hbase-assembly/target/hbase-${PRODUCT_VERSION}-bin.tar.gz -C /kubedoop
     ln -s /kubedoop/hbase-${PRODUCT_VERSION} /kubedoop/hbase
     popd
-
 EOF
 
 # smoke test
@@ -237,7 +237,7 @@ COPY --from=hadoop-builder \
 
 
 ## stage: final
-FROM zncdatadev/image/java-base
+FROM zncdatadev/image/java-base:11-kubedoop0.0.0-dev
 
 ARG PRODUCT_VERSION
 ARG HBASE_PROFILE_VERSION
@@ -286,7 +286,7 @@ RUN <<EOF
     rm -rf /var/cache/yum
 
     find /kubedoop/hadoop/share/ -name *.jar | grep 'aws' | xargs -I {} ln -s {} /kubedoop/hbase/lib/
-    ln -s /kubedoop/phoenix/phoenix-server-hbase-${HBASE_PROFILE_VERSION}.jar /kubedoop/hbase/lib/
+    # ln -s /kubedoop/phoenix/phoenix-server-hbase-${HBASE_PROFILE_VERSION}.jar /kubedoop/hbase/lib/ #!!!!!!!!! if uncomment phoenix, need to add this line #!!!!!!!!!
 EOF
 
 ENV HBASE_HOME=/kubedoop/hbase
