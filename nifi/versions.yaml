@@ -2,6 +2,6 @@ versions:
   - product: 1.27.0
     java-base: 11
     java-devel: 11
-  - product: 2.0.0
-    java-base: 21
-    java-devel: 21
+  # - product: 2.0.0
+  #   java-base: 21
+  #   java-devel: 21

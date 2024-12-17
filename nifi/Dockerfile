@@ -9,7 +9,6 @@ WORKDIR /build
 
 # Build apache nifi from github tag
 RUN <<EOF
-
     mkdir -p /build/nifi-src
     pushd /build/nifi-src
     # Download apache nifi source from https://github.com/apache/nifi/releases/tag/rel%2Fnifi-1.27.0
@@ -37,7 +36,6 @@ RUN <<EOF
     # Rm nifi doc
     rm -rf /kubedoop/nifi/docs
     popd
-
 EOF
 
 # smoke test
