@@ -22,6 +22,7 @@ products:
   - hbase
   - spark-k8s
   - nifi
+  - doris
 # If file under the path is changed, the all product will be rebuilt
 global-paths:
   - .github/workflows

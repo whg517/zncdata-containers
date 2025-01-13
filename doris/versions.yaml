@@ -1,0 +1,5 @@
+versions:
+  - product: 2.1.7-rc03
+    ldb-toolchain: 0.21
+    java-base: 8
+    java-devel: 8
