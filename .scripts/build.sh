@@ -44,10 +44,12 @@ Options:
   -p,   --push                    Push the built image to the registry, if not set, load the image to local docker
   -s,   --sign                    Sign the image with cosign
         --progress PROGRESS       Set the build progress output format. Default is 'auto'.
-                                  Use 'plain' for plain text output, useful for debugging.
+                                    Use 'plain' for plain text output, useful for debugging.
         --arch-suffix             Use architecture suffix for image tags when pushing to registry.
-                                  This is useful when building multi-arch images.
-                                  Note: this option is ignored if --platform specifies multiple platforms.
+                                    This is useful when building multi-arch images.
+                                    Note: this option is ignored if --platform specifies multiple platforms.
+        --push-by-digest          Push the built image by digest to the registry.
+                                    This is useful for ensuring image immutability and integrity.
   -h,   --help                    Show this message
 "
 
@@ -57,6 +59,7 @@ Options:
   local sign=false
   local platform_input="" # Raw --platform string from CLI
   local arch_suffix=false # Use architecture suffix for image tags
+  local push_by_digest=false # Push the built image by digest
   # Change target to array
   local -a products=()
 
@@ -91,6 +94,9 @@ Options:
       --arch-suffix )
         arch_suffix=true
         ;;
+      --push-by-digest )
+        push_by_digest=true
+        ;;
       * )
         # Handle non-option argument as target
         if [[ $1 != -* ]]; then
@@ -111,6 +117,18 @@ Options:
   # Print all specified products
   if [ ${#products[@]} -gt 0 ]; then
     echo "INFO: Specified products: ${products[*]}" >&2
+  fi
+
+  # Validate push-by-digest parameter
+  if [ "$push_by_digest" = true ]; then
+    if [ "$push" = false ]; then
+      echo "INFO: --push-by-digest implies --push, enabling push mode" >&2
+      push=true
+    fi
+    # Warn if arch-suffix is used with push-by-digest
+    if [ "$arch_suffix" = true ]; then
+      echo "WARNING: --arch-suffix has no effect when --push-by-digest is used" >&2
+    fi
   fi
 
   # Check system requirements if signing is requested
@@ -136,7 +154,7 @@ Options:
   echo "INFO: Specified products with versions: ${products[*]}" >&2
 
   # Get the bakefile configuration
-  local bakefile=$(get_bakefile "$platforms" "$arch_suffix")
+  local bakefile=$(get_bakefile "$platforms" "$arch_suffix" "$push_by_digest")
 
   # Update function call order of parameters
   build_sign_image "$bakefile" $push $sign "$progress" "${products[*]}"
@@ -347,12 +365,14 @@ function build_sign_image () {
 # Arguments:
 #   $1: str, platforms, platforms for bakefile. eg: '["linux/amd64", "linux/arm64"]'
 #   $2: bool, arch_suffix, whether to add architecture suffix to tags for single-platform builds
+#   $3: bool, push_by_digest, whether to push images by digest instead of tags
 # Returns:
 #   JSON: bake file JSON object
 #
 function get_bakefile () {
   local platforms=$1
   local arch_suffix=$2
+  local push_by_digest=$3
 
   # if platforms is empty, set default value
   if [ -z "$platforms" ]; then
@@ -392,7 +412,8 @@ function get_bakefile () {
         product_groups=$(echo "$product_groups" | jq --arg name "$target_name" '. + [$name]')
 
         # Construct tags object
-        local base_tag="$REGISTRY/$product_name:$product_version-$KUBEDOOP_TAG"
+        local image_name="$REGISTRY/$product_name"
+        local base_tag="$image_name:$product_version-$KUBEDOOP_TAG"
 
         # Add architecture suffix if requested and building single platform
         if [ "$arch_suffix" = true ]; then
@@ -455,6 +476,17 @@ function get_bakefile () {
         annotations=$(echo "$annotations" | jq --arg k "org.opencontainers.image.created=$datetime" '. + [$k]')
         annotations=$(echo "$annotations" | jq --arg k "org.opencontainers.image.revision=$current_sha" '. + [$k]')
         target=$(echo "$target" | jq --argjson v "$annotations" '. + {annotations: $v}')
+
+        # Configure output and tags based on push_by_digest setting
+        if [ "$push_by_digest" = true ]; then
+          # Push by digest: use push-by-digest output and update tags to image name only
+          local output="type=image,push=true,push-by-digest=true"
+          target=$(echo "$target" | jq --arg k "output" --arg v "$output" '. + {($k): [$v]}')
+
+          # Update tags to use only image name without version tag
+          local digest_tags=$(jq -n --arg tag "$image_name" '[$tag]')
+          target=$(echo "$target" | jq --arg k "tags" --argjson v "$digest_tags" '. + {($k): $v}')
+        fi
 
         # Add platforms and dockerfile to target
         target=$(echo "$target" | jq --arg k "platforms" --argjson v "$platforms" '. + {($k): $v}')
