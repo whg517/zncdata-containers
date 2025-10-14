@@ -8,6 +8,9 @@ The commits in this PR need to be updated to follow the [Conventional Commits](h
 3. `2e98901` - "Add curl package explicitly to tools image"
 4. `66bd628` - "docs: add note about commit message format update" (metadata commit)
 5. `8ca6fc7` - "revert: remove temporary commit message documentation" (cleanup commit)
+6. `627746a` - "docs: add instructions for fixing commit messages" (this file)
+
+Note: Commits 1, 4, 5, and 6 should be dropped as they are metadata/process commits. Commits 2 and 3 should be squashed into a single commit with proper Conventional Commits format.
 
 ## Recommended Solution: Interactive Rebase
 
@@ -23,6 +26,7 @@ git rebase -i ed074a1
 # - Line for 2e98901: change 'pick' to 'fixup' (squash into previous)
 # - Line for 66bd628: change 'pick' to 'drop' (remove metadata commit)
 # - Line for 8ca6fc7: change 'pick' to 'drop' (remove cleanup commit)
+# - Line for 627746a: change 'pick' to 'drop' (remove this instruction file commit)
 
 # When prompted to reword d19fb67, use this message:
 feat(tools): add envsubst command to tools image
