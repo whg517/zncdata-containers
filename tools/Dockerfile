@@ -9,6 +9,7 @@ ARG GETTEXT_VERSION=0.22.5
 RUN <<EOF
     microdnf update
     microdnf install \
+        curl \
         gcc \
         make \
         tar \
@@ -55,6 +56,7 @@ RUN <<EOF
     microdnf update
 
     microdnf install \
+        curl \
         gzip \
         iputils \
         openssl \
