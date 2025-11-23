@@ -59,7 +59,7 @@ RUN --mount=type=cache,target=/root/.m2 <<EOF
         package \
         -DskipTests \
         -Dmaven.gitcommitid.skip=true \
-        --projects='!docs,!core/trino-server-rpm' \
+        --projects='!docs' \
         -e ; then
         echo "ERROR: Trino build failed"
         exit 1
