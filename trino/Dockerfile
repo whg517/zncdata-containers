@@ -57,7 +57,6 @@ RUN --mount=type=cache,target=/root/.m2 <<EOF
     if ! ./mvnw \
         --batch-mode \
         --no-transfer-progress \
-        install \
         package \
         -DskipTests \
         -Dcheckstyle.skip \
