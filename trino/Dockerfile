@@ -54,12 +54,15 @@ RUN --mount=type=cache,target=/root/.m2 <<EOF
 
     # Build trino with error checking
     echo "Starting Trino build..."
-    if ! ./mvnw --batch-mode \
+    if ! ./mvnw \
+        --batch-mode \
         --no-transfer-progress \
         package \
         -DskipTests \
+        -Dcheckstyle.skip \
+        -Dmaven.javadoc.skip=true \
         -Dmaven.gitcommitid.skip=true \
-        --projects='!docs,!core/trino-server-rpm' \
+        --projects='!docs' \
         -e ; then
         echo "ERROR: Trino build failed"
         exit 1
