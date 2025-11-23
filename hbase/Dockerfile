@@ -197,6 +197,7 @@ RUN <<EOF
         -Dhbase.version=${PRODUCT_VERSION} \
         -Dhbase-thirdparty.version=${HBASE_THIRDPARTY_VERSION} \
         -DskipTests \
+        -Dmaven.test.skip=true \
         package assembly:single
 
     HBASE_OPERATOR_TOOLS_BINARY="hbase-operator-tools-assembly/target/hbase-operator-tools-${HBASE_OPERATOR_TOOLS_VERSION}-bin.tar.gz"
