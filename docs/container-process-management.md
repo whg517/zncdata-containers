@@ -47,7 +47,7 @@ Product entrypoint:  /kubedoop/bin/start-app.sh   (product-specific, any name ex
 │   └── entrypoint.sh
 ├── lib/          root:root 0755  # Framework libraries
 │   ├── log.sh
-│   ├── scripts.sh
+│   ├── run.sh
 │   ├── signal.sh
 │   └── pod-state.sh           (deferred)
 ├── mount/        root:root 0755  # Runtime injection layer (fixed mount points)
@@ -145,11 +145,11 @@ log_debug() {
 }
 ```
 
-### lib/scripts.sh — Operator Script Discovery and Execution
+### lib/run.sh — Operator Script Discovery and Execution
 
 ```bash
 #!/bin/bash
-# /kubedoop/lib/scripts.sh — Operator-provided lifecycle scripts
+# /kubedoop/lib/run.sh — Operator-provided lifecycle scripts
 #
 # Executes the scripts operators mount under /kubedoop/mount/:
 #   run_pre_scripts   - ${KUBEDOOP_MOUNT_DIR}/pre-script   (before the main process starts)
@@ -263,7 +263,7 @@ run_post_scripts() {
 # Provides graceful process termination, cleanup orchestration,
 # and full lifecycle management for the universal entrypoint.
 #
-# Depends on: lib/log.sh, lib/scripts.sh (loaded via glob in entrypoint)
+# Depends on: lib/log.sh, lib/run.sh (loaded via glob in entrypoint)
 #
 # Required global variables (set by entrypoint before calling run_lifecycle):
 #   KUBEDOOP_KILL_TIMEOUT - Max seconds to wait before SIGKILL (readonly)
@@ -583,7 +583,7 @@ mkdir -p "${KUBEDOOP_RUN_DIR}"
 
 # Load common libraries.
 # Libraries load in glob sort order. If a library depends on another,
-# it must document this requirement (e.g., signal.sh depends on log.sh and scripts.sh).
+# it must document this requirement (e.g., signal.sh depends on log.sh and run.sh).
 for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do
     if [[ -f "$lib" ]]; then
         # shellcheck source=/dev/null
@@ -1055,7 +1055,7 @@ extraction lands — its `Dockerfile` simply drops the now-inherited steps.
 ### Phase 1: Infrastructure
 
 - kubedoop-base installs chosen init system
-- Deploy `lib/` (log.sh, scripts.sh, signal.sh) and `bin/entrypoint.sh`
+- Deploy `lib/` (log.sh, run.sh, signal.sh) and `bin/entrypoint.sh`
 - Create empty `mount/{pre-script,post-script}` directories
 
 ### Phase 2: Simple Products (Zero-script Products)

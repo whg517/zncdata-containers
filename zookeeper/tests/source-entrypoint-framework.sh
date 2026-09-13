@@ -42,7 +42,7 @@ wait_for_file() {
 # shellcheck source=/dev/null
 source "${LIB_DIR}/log.sh"
 # shellcheck source=/dev/null
-source "${LIB_DIR}/scripts.sh"
+source "${LIB_DIR}/run.sh"
 # shellcheck source=/dev/null
 source "${LIB_DIR}/signal.sh"
 
@@ -63,7 +63,7 @@ test_sigterm_is_forwarded() {
 
     (
         source "${LIB_DIR}/log.sh"
-        source "${LIB_DIR}/scripts.sh"
+        source "${LIB_DIR}/run.sh"
         source "${LIB_DIR}/signal.sh"
         KUBEDOOP_KILL_TIMEOUT=2
         KUBEDOOP_MOUNT_DIR="${TMP_DIR}/missing-hooks"
@@ -92,7 +92,7 @@ test_sigkill_after_timeout() {
 
     (
         source "${LIB_DIR}/log.sh"
-        source "${LIB_DIR}/scripts.sh"
+        source "${LIB_DIR}/run.sh"
         source "${LIB_DIR}/signal.sh"
         KUBEDOOP_KILL_TIMEOUT=1
         KUBEDOOP_MOUNT_DIR="${TMP_DIR}/missing-hooks"

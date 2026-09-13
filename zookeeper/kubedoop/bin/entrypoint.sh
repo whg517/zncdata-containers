@@ -27,7 +27,7 @@ mkdir -p "${KUBEDOOP_RUN_DIR}"
 
 # Load common libraries.
 # Libraries load in glob sort order. If a library depends on another,
-# it must document this requirement (e.g., signal.sh depends on log.sh and scripts.sh).
+# it must document this requirement (e.g., signal.sh depends on log.sh and run.sh).
 for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do
     if [[ -f "$lib" ]]; then
         # shellcheck source=/dev/null

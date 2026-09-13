@@ -4,7 +4,7 @@
 # Provides graceful process termination, cleanup orchestration,
 # and full lifecycle management for the universal entrypoint.
 #
-# Depends on: lib/log.sh, lib/scripts.sh (loaded via glob in entrypoint)
+# Depends on: lib/log.sh, lib/run.sh (loaded via glob in entrypoint)
 #
 # Required global variables (set by entrypoint before calling run_lifecycle):
 #   KUBEDOOP_KILL_TIMEOUT - Max seconds to wait before SIGKILL (readonly)

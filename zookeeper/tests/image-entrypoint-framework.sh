@@ -115,7 +115,7 @@ test_runtime_files_and_user() {
         test -x /usr/bin/tini
         test -x /kubedoop/bin/entrypoint.sh
         test -x /kubedoop/lib/log.sh
-        test -x /kubedoop/lib/scripts.sh
+        test -x /kubedoop/lib/run.sh
         test -x /kubedoop/lib/signal.sh
         test "$(stat -c "%u:%a" /kubedoop/bin/entrypoint.sh)" = "0:755"
         test "$(stat -c "%u:%a" /kubedoop/lib/signal.sh)" = "0:755"

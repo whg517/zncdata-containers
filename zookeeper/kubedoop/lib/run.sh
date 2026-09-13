@@ -1,5 +1,5 @@
 #!/bin/bash
-# /kubedoop/lib/scripts.sh -- Operator-provided lifecycle scripts
+# /kubedoop/lib/run.sh -- Operator-provided lifecycle scripts
 #
 # Executes the scripts operators mount under /kubedoop/mount/:
 #   run_pre_scripts   - ${KUBEDOOP_MOUNT_DIR}/pre-script   (before the main process starts)
