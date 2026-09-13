@@ -27,7 +27,7 @@ mkdir -p "${KUBEDOOP_RUN_DIR}"
 
 # Load common libraries.
 # Libraries load in glob sort order. If a library depends on another,
-# it must document this requirement (e.g., signal.sh depends on log.sh and run-phase.sh).
+# it must document this requirement (e.g., signal.sh depends on log.sh and scripts.sh).
 for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do
     if [[ -f "$lib" ]]; then
         # shellcheck source=/dev/null
@@ -37,15 +37,15 @@ done
 
 log_info "Entrypoint starting: $*"
 
-# --- Phase 1: Runtime pre-script hooks (auto-discovered from mount) ---
+# --- Step 1: Operator pre-scripts (auto-discovered from mount) ---
 # Note: pre-script failure prevents main process startup (fail-fast).
 # Operators must test injected scripts in non-production environments first.
-if ! run_phase "pre-script" "${KUBEDOOP_MOUNT_DIR}/pre-script"; then
-    log_error "Pre-script phase failed, aborting startup"
+if ! run_pre_scripts; then
+    log_error "Pre-scripts failed, aborting startup"
     exit 1
 fi
 
-# --- Phase 2: Start main process and manage lifecycle ---
+# --- Step 2: Start main process and manage lifecycle ---
 if [[ $# -eq 0 ]]; then
     log_error "No command specified"
     exit 1

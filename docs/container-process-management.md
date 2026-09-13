@@ -47,7 +47,7 @@ Product entrypoint:  /kubedoop/bin/start-app.sh   (product-specific, any name ex
 │   └── entrypoint.sh
 ├── lib/          root:root 0755  # Framework libraries
 │   ├── log.sh
-│   ├── run-phase.sh
+│   ├── scripts.sh
 │   ├── signal.sh
 │   └── pod-state.sh           (deferred)
 ├── mount/        root:root 0755  # Runtime injection layer (fixed mount points)
@@ -74,7 +74,7 @@ Kubernetes sends SIGTERM
 |  +- entrypoint.sh (PID 2) --------------------------------+ |
 |  |                                                         | |
 |  |  [1] source lib/*.sh                Load libraries      | |
-|  |  [2] run_phase mount/pre-script     Runtime pre-hooks   | |
+|  |  [2] run_pre_scripts                Operator pre-scripts | |
 |  |  [3] run_lifecycle "$@"             Start + manage      | |
 |  |      ├── trap 'defer' SIGTERM SIGINT Defer (not SIG_IGN)| |
 |  |      ├── "$@" & MAIN_PID=$!         Background CMD      | |
@@ -83,7 +83,7 @@ Kubernetes sends SIGTERM
 |  |                                                         | |
 |  |  -- On SIGTERM received (via cleanup) --                 | |
 |  |  [4] stop_process $MAIN_PID         Graceful shutdown   | |
-|  |  [5] run_phase mount/post-script    Runtime post-hooks  | |
+|  |  [5] run_post_scripts               Operator post-scripts | |
 |  |  [6] exit $EXIT_CODE                Propagate exit      | |
 |  +---------------------------------------------------------+ |
 +--------------------------------------------------------------+
@@ -145,19 +145,23 @@ log_debug() {
 }
 ```
 
-### lib/run-phase.sh — Script Discovery and Execution Engine
+### lib/scripts.sh — Operator Script Discovery and Execution
 
 ```bash
 #!/bin/bash
-# /kubedoop/lib/run-phase.sh — Script auto-discovery and execution
+# /kubedoop/lib/scripts.sh — Operator-provided lifecycle scripts
+#
+# Executes the scripts operators mount under /kubedoop/mount/:
+#   run_pre_scripts   - ${KUBEDOOP_MOUNT_DIR}/pre-script   (before the main process starts)
+#   run_post_scripts  - ${KUBEDOOP_MOUNT_DIR}/post-script  (after the main process stopped)
 
 # Discover executable scripts in a directory, sorted by filename.
 # Output: null-delimited sorted list of script paths.
 # Returns non-zero if find or sort fails.
-discover_scripts() {
-    local phase_dir="$1"
+_discover_scripts() {
+    local scripts_dir="$1"
 
-    if [[ ! -d "$phase_dir" ]]; then
+    if [[ ! -d "$scripts_dir" ]]; then
         return 0
     fi
 
@@ -167,7 +171,7 @@ discover_scripts() {
     # With ConfigMap defaultMode: 0755, this correctly matches all executable scripts.
     # SECURITY: Only execute scripts owned by root (uid 0) to prevent injection
     # from non-root writable volumes (emptyDir, PVC, hostPath).
-    find "$phase_dir" -maxdepth 1 -type f -name '*.sh' -executable \
+    find "$scripts_dir" -maxdepth 1 -type f -name '*.sh' -executable \
         -uid 0 -print0 \
         | sort -z
     local -a pipeline_status=("${PIPESTATUS[@]}")
@@ -178,13 +182,13 @@ discover_scripts() {
     return 0
 }
 
-# Run scripts sequentially (for pre-script / post-script)
-# Any script failure aborts the phase
-run_phase() {
-    local phase_name="$1"
-    local phase_dir="$2"
+# Run scripts sequentially, in filename sort order.
+# Any script failure aborts the run.
+_run_scripts() {
+    local label="$1"
+    local scripts_dir="$2"
 
-    if [[ ! -d "$phase_dir" ]]; then
+    if [[ ! -d "$scripts_dir" ]]; then
         return 0
     fi
 
@@ -193,20 +197,20 @@ run_phase() {
     local script_list
 
     # Materialize discovery output so its exit status is observable.
-    if ! script_list=$(mktemp "${KUBEDOOP_RUN_DIR:-/tmp}/.phase-scripts.XXXXXX"); then
-        log_error "Phase '$phase_name': failed to create script discovery file"
+    if ! script_list=$(mktemp "${KUBEDOOP_RUN_DIR:-/tmp}/.scripts.XXXXXX"); then
+        log_error "$label: failed to create script discovery file"
         return 1
     fi
 
-    if ! discover_scripts "$phase_dir" > "$script_list"; then
-        log_error "Phase '$phase_name': failed to discover scripts in $phase_dir"
+    if ! _discover_scripts "$scripts_dir" > "$script_list"; then
+        log_error "$label: failed to discover scripts in $scripts_dir"
         rm -f "$script_list"
         return 1
     fi
 
     local script_list_fd
     if ! exec {script_list_fd}<"$script_list"; then
-        log_error "Phase '$phase_name': failed to read discovered script list"
+        log_error "$label: failed to read discovered script list"
         rm -f "$script_list"
         return 1
     fi
@@ -216,13 +220,13 @@ run_phase() {
         found_any=true
         local name
         name=$(basename "$script")
-        log_info "Phase '$phase_name': running $name"
+        log_info "$label: running $name"
         count=$((count + 1))
 
         local rc=0
         "$script" || rc=$?
         if [[ $rc -ne 0 ]]; then
-            log_error "Phase '$phase_name': $name failed with exit code $rc"
+            log_error "$label: $name failed with exit code $rc"
             exec {script_list_fd}<&-
             return 1
         fi
@@ -231,12 +235,22 @@ run_phase() {
     exec {script_list_fd}<&-
 
     if [[ "$found_any" == false ]]; then
-        log_info "Phase '$phase_name': no scripts found in $phase_dir"
+        log_info "$label: no scripts found"
         return 0
     fi
 
-    log_info "Phase '$phase_name': completed ($count scripts)"
+    log_info "$label: completed ($count scripts)"
     return 0
+}
+
+# Operator pre-scripts: run before the main process starts (fail-fast).
+run_pre_scripts() {
+    _run_scripts "pre-script" "${KUBEDOOP_MOUNT_DIR}/pre-script"
+}
+
+# Operator post-scripts: run during shutdown cleanup.
+run_post_scripts() {
+    _run_scripts "post-script" "${KUBEDOOP_MOUNT_DIR}/post-script"
 }
 ```
 
@@ -249,7 +263,7 @@ run_phase() {
 # Provides graceful process termination, cleanup orchestration,
 # and full lifecycle management for the universal entrypoint.
 #
-# Depends on: lib/log.sh, lib/run-phase.sh (loaded via glob in entrypoint)
+# Depends on: lib/log.sh, lib/scripts.sh (loaded via glob in entrypoint)
 #
 # Required global variables (set by entrypoint before calling run_lifecycle):
 #   KUBEDOOP_KILL_TIMEOUT - Max seconds to wait before SIGKILL (readonly)
@@ -364,8 +378,8 @@ cleanup() {
 
     log_info "Main process stopped"
 
-    # Phase: Runtime post-script hooks (auto-discovered from mount)
-    run_phase "post-script" "${KUBEDOOP_MOUNT_DIR}/post-script" || true
+    # Operator post-scripts (auto-discovered from mount); best-effort
+    run_post_scripts || true
 
     log_info "Shutdown complete"
 }
@@ -569,7 +583,7 @@ mkdir -p "${KUBEDOOP_RUN_DIR}"
 
 # Load common libraries.
 # Libraries load in glob sort order. If a library depends on another,
-# it must document this requirement (e.g., signal.sh depends on log.sh and run-phase.sh).
+# it must document this requirement (e.g., signal.sh depends on log.sh and scripts.sh).
 for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do
     if [[ -f "$lib" ]]; then
         # shellcheck source=/dev/null
@@ -579,15 +593,15 @@ done
 
 log_info "Entrypoint starting: $*"
 
-# --- Phase 1: Runtime pre-script hooks (auto-discovered from mount) ---
+# --- Step 1: Operator pre-scripts (auto-discovered from mount) ---
 # Note: pre-script failure prevents main process startup (fail-fast).
 # Operators must test injected scripts in non-production environments first.
-if ! run_phase "pre-script" "${KUBEDOOP_MOUNT_DIR}/pre-script"; then
-    log_error "Pre-script phase failed, aborting startup"
+if ! run_pre_scripts; then
+    log_error "Pre-scripts failed, aborting startup"
     exit 1
 fi
 
-# --- Phase 2: Start main process and manage lifecycle ---
+# --- Step 2: Start main process and manage lifecycle ---
 if [[ $# -eq 0 ]]; then
     log_error "No command specified"
     exit 1
@@ -1041,7 +1055,7 @@ extraction lands — its `Dockerfile` simply drops the now-inherited steps.
 ### Phase 1: Infrastructure
 
 - kubedoop-base installs chosen init system
-- Deploy `lib/` (log.sh, run-phase.sh, signal.sh) and `bin/entrypoint.sh`
+- Deploy `lib/` (log.sh, scripts.sh, signal.sh) and `bin/entrypoint.sh`
 - Create empty `mount/{pre-script,post-script}` directories
 
 ### Phase 2: Simple Products (Zero-script Products)

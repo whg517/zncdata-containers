@@ -42,7 +42,7 @@ wait_for_file() {
 # shellcheck source=/dev/null
 source "${LIB_DIR}/log.sh"
 # shellcheck source=/dev/null
-source "${LIB_DIR}/run-phase.sh"
+source "${LIB_DIR}/scripts.sh"
 # shellcheck source=/dev/null
 source "${LIB_DIR}/signal.sh"
 
@@ -63,7 +63,7 @@ test_sigterm_is_forwarded() {
 
     (
         source "${LIB_DIR}/log.sh"
-        source "${LIB_DIR}/run-phase.sh"
+        source "${LIB_DIR}/scripts.sh"
         source "${LIB_DIR}/signal.sh"
         KUBEDOOP_KILL_TIMEOUT=2
         KUBEDOOP_MOUNT_DIR="${TMP_DIR}/missing-hooks"
@@ -92,7 +92,7 @@ test_sigkill_after_timeout() {
 
     (
         source "${LIB_DIR}/log.sh"
-        source "${LIB_DIR}/run-phase.sh"
+        source "${LIB_DIR}/scripts.sh"
         source "${LIB_DIR}/signal.sh"
         KUBEDOOP_KILL_TIMEOUT=1
         KUBEDOOP_MOUNT_DIR="${TMP_DIR}/missing-hooks"
@@ -115,52 +115,52 @@ test_sigkill_after_timeout() {
     pass "SIGKILL escalation occurs after KUBEDOOP_KILL_TIMEOUT"
 }
 
-test_root_owned_phase_scripts_when_possible() {
+test_root_owned_scripts_when_possible() {
     if [[ "$(id -u)" -ne 0 ]]; then
-        echo "skip - root-owned phase script execution requires running this test as root"
+        echo "skip - root-owned script execution requires running this test as root"
         return 0
     fi
 
-    local phase_dir="${TMP_DIR}/phase"
-    local marker="${TMP_DIR}/phase-order"
-    mkdir -p "$phase_dir"
+    local scripts_dir="${TMP_DIR}/scripts"
+    local marker="${TMP_DIR}/script-order"
+    mkdir -p "$scripts_dir"
 
-    cat > "${phase_dir}/20-second.sh" <<EOF
+    cat > "${scripts_dir}/20-second.sh" <<EOF
 #!/bin/bash
 echo second >> "${marker}"
 EOF
-    cat > "${phase_dir}/10-first.sh" <<EOF
+    cat > "${scripts_dir}/10-first.sh" <<EOF
 #!/bin/bash
 echo first >> "${marker}"
 EOF
-    chmod 0755 "${phase_dir}/10-first.sh" "${phase_dir}/20-second.sh"
+    chmod 0755 "${scripts_dir}/10-first.sh" "${scripts_dir}/20-second.sh"
 
-    run_phase "test-phase" "$phase_dir" || fail "root-owned phase scripts failed"
+    _run_scripts "test" "$scripts_dir" || fail "root-owned scripts failed"
 
     local order
     order=$(tr '\n' ',' < "$marker")
-    [[ "$order" == "first,second," ]] || fail "expected sorted phase execution, got ${order}"
-    pass "root-owned executable phase scripts run in sorted order"
+    [[ "$order" == "first,second," ]] || fail "expected sorted script execution, got ${order}"
+    pass "root-owned executable scripts run in sorted order"
 }
 
 test_script_discovery_failure_is_propagated() {
     local original_discover_scripts
-    original_discover_scripts=$(declare -f discover_scripts)
+    original_discover_scripts=$(declare -f _discover_scripts)
 
-    discover_scripts() {
+    _discover_scripts() {
         return 23
     }
 
-    if run_phase "discovery-failure" "${KUBEDOOP_MOUNT_DIR}/pre-script"; then
+    if run_pre_scripts; then
         fail "script discovery failure was reported as success"
     fi
 
     eval "$original_discover_scripts"
-    pass "script discovery failure aborts the phase"
+    pass "script discovery failure aborts the pre-script run"
 }
 
 test_normal_exit_code
 test_sigterm_is_forwarded
 test_sigkill_after_timeout
-test_root_owned_phase_scripts_when_possible
+test_root_owned_scripts_when_possible
 test_script_discovery_failure_is_propagated

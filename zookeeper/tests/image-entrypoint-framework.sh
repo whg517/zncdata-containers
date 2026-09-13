@@ -115,7 +115,7 @@ test_runtime_files_and_user() {
         test -x /usr/bin/tini
         test -x /kubedoop/bin/entrypoint.sh
         test -x /kubedoop/lib/log.sh
-        test -x /kubedoop/lib/run-phase.sh
+        test -x /kubedoop/lib/scripts.sh
         test -x /kubedoop/lib/signal.sh
         test "$(stat -c "%u:%a" /kubedoop/bin/entrypoint.sh)" = "0:755"
         test "$(stat -c "%u:%a" /kubedoop/lib/signal.sh)" = "0:755"
@@ -130,54 +130,54 @@ test_exit_code_propagation() {
     pass "entrypoint preserves main process exit code"
 }
 
-build_hook_test_image() {
+build_script_test_image() {
     TEST_IMAGE="zookeeper-entrypoint-test:$(date +%s)-$$"
-    mkdir -p "${TMP_DIR}/hooks"
+    mkdir -p "${TMP_DIR}/scripts"
 
-    cat >"${TMP_DIR}/hooks/10-pre.sh" <<'EOF'
+    cat >"${TMP_DIR}/scripts/10-pre.sh" <<'EOF'
 #!/bin/bash
 set -uo pipefail
-echo pre-hook > /kubedoop/run/pre-hook
-echo TEST_PRE_HOOK_RAN
+echo pre-script-marker > /kubedoop/run/pre-script-marker
+echo TEST_PRE_SCRIPT_RAN
 EOF
 
-    cat >"${TMP_DIR}/hooks/10-post.sh" <<'EOF'
+    cat >"${TMP_DIR}/scripts/10-post.sh" <<'EOF'
 #!/bin/bash
 set -uo pipefail
-test -f /kubedoop/run/pre-hook
-echo TEST_POST_HOOK_RAN
+test -f /kubedoop/run/pre-script-marker
+echo TEST_POST_SCRIPT_RAN
 EOF
 
-    chmod 0755 "${TMP_DIR}/hooks/10-pre.sh" "${TMP_DIR}/hooks/10-post.sh"
+    chmod 0755 "${TMP_DIR}/scripts/10-pre.sh" "${TMP_DIR}/scripts/10-post.sh"
 
     cat >"${TMP_DIR}/Dockerfile" <<EOF
 FROM ${IMAGE}
 USER root
-COPY --chown=root:root hooks/10-pre.sh /kubedoop/mount/pre-script/10-pre.sh
-COPY --chown=root:root hooks/10-post.sh /kubedoop/mount/post-script/10-post.sh
+COPY --chown=root:root scripts/10-pre.sh /kubedoop/mount/pre-script/10-pre.sh
+COPY --chown=root:root scripts/10-post.sh /kubedoop/mount/post-script/10-post.sh
 RUN chmod 0755 /kubedoop/mount/pre-script/10-pre.sh /kubedoop/mount/post-script/10-post.sh
 USER kubedoop
 EOF
 
-    docker build -q -t "$TEST_IMAGE" "$TMP_DIR" >/dev/null || fail "failed to build hook test image"
+    docker build -q -t "$TEST_IMAGE" "$TMP_DIR" >/dev/null || fail "failed to build script test image"
 }
 
-test_root_owned_hooks_execute() {
-    build_hook_test_image
+test_root_owned_scripts_execute() {
+    build_script_test_image
 
     local output
     output=$(docker run --rm "$TEST_IMAGE" bash -c '
-        test -f /kubedoop/run/pre-hook
+        test -f /kubedoop/run/pre-script-marker
         echo TEST_MAIN_RAN
     ' 2>&1) || {
         echo "$output" >&2
-        fail "root-owned hook image run failed"
+        fail "root-owned script image run failed"
     }
 
-    assert_contains "$output" "TEST_PRE_HOOK_RAN" "pre hook did not run"
-    assert_contains "$output" "TEST_MAIN_RAN" "main command did not run after pre hook"
-    assert_contains "$output" "TEST_POST_HOOK_RAN" "post hook did not run"
-    pass "root-owned pre/post hooks execute in the final image"
+    assert_contains "$output" "TEST_PRE_SCRIPT_RAN" "pre-script did not run"
+    assert_contains "$output" "TEST_MAIN_RAN" "main command did not run after pre-script"
+    assert_contains "$output" "TEST_POST_SCRIPT_RAN" "post-script did not run"
+    pass "root-owned pre/post scripts execute in the final image"
 }
 
 test_sigterm_is_forwarded() {
@@ -226,6 +226,6 @@ test_image_exists
 test_entrypoint_metadata
 test_runtime_files_and_user
 test_exit_code_propagation
-test_root_owned_hooks_execute
+test_root_owned_scripts_execute
 test_sigterm_is_forwarded
 test_sigkill_after_timeout

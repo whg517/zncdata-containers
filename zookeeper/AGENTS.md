@@ -28,7 +28,7 @@ See `versions.yaml` for current values. Structure:
 ### Custom Scripts
 - `kubedoop/patches/apply_patches.sh` — applies .patch files from version subdirectories
 - `kubedoop/bin/entrypoint.sh` — universal entrypoint framework pilot for process lifecycle management
-- `kubedoop/lib/` — entrypoint framework libraries for logging, hook discovery, and signal handling
+- `kubedoop/lib/` — entrypoint framework libraries for logging, operator script discovery/execution, and signal handling
 - `tests/source-entrypoint-framework.sh` — source-level shell tests for the vendored entrypoint framework
 - `tests/image-entrypoint-framework.sh` — image-level tests for built entrypoint behavior
 
