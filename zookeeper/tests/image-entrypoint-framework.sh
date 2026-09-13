@@ -220,7 +220,7 @@ test_sigkill_after_timeout() {
     pass "SIGKILL escalation works in the final image"
 }
 
-cd "$REPO_DIR"
+cd "$REPO_DIR" || fail "failed to enter repository directory: $REPO_DIR"
 
 test_image_exists
 test_entrypoint_metadata

@@ -151,8 +151,9 @@ log_debug() {
 #!/bin/bash
 # /kubedoop/lib/run-phase.sh — Script auto-discovery and execution
 
-# Discover executable scripts in a directory, sorted by filename
-# Output: sorted list of script paths (one per line)
+# Discover executable scripts in a directory, sorted by filename.
+# Output: null-delimited sorted list of script paths.
+# Returns non-zero if find or sort fails.
 discover_scripts() {
     local phase_dir="$1"
 
@@ -169,6 +170,12 @@ discover_scripts() {
     find "$phase_dir" -maxdepth 1 -type f -name '*.sh' -executable \
         -uid 0 -print0 \
         | sort -z
+    local -a pipeline_status=("${PIPESTATUS[@]}")
+    if [[ "${pipeline_status[0]}" -ne 0 || "${pipeline_status[1]}" -ne 0 ]]; then
+        return 1
+    fi
+
+    return 0
 }
 
 # Run scripts sequentially (for pre-script / post-script)
@@ -183,6 +190,27 @@ run_phase() {
 
     local count=0
     local found_any=false
+    local script_list
+
+    # Materialize discovery output so its exit status is observable.
+    if ! script_list=$(mktemp "${KUBEDOOP_RUN_DIR:-/tmp}/.phase-scripts.XXXXXX"); then
+        log_error "Phase '$phase_name': failed to create script discovery file"
+        return 1
+    fi
+
+    if ! discover_scripts "$phase_dir" > "$script_list"; then
+        log_error "Phase '$phase_name': failed to discover scripts in $phase_dir"
+        rm -f "$script_list"
+        return 1
+    fi
+
+    local script_list_fd
+    if ! exec {script_list_fd}<"$script_list"; then
+        log_error "Phase '$phase_name': failed to read discovered script list"
+        rm -f "$script_list"
+        return 1
+    fi
+    rm -f "$script_list"
 
     while IFS= read -r -d '' script; do
         found_any=true
@@ -195,9 +223,12 @@ run_phase() {
         "$script" || rc=$?
         if [[ $rc -ne 0 ]]; then
             log_error "Phase '$phase_name': $name failed with exit code $rc"
+            exec {script_list_fd}<&-
             return 1
         fi
-    done < <(discover_scripts "$phase_dir")
+    done <&"$script_list_fd"
+
+    exec {script_list_fd}<&-
 
     if [[ "$found_any" == false ]]; then
         log_info "Phase '$phase_name': no scripts found in $phase_dir"
@@ -284,7 +315,9 @@ stop_process() {
 
     wait "$pid" 2>/dev/null
     local rc=$?
-    if [[ "$timed_out" -eq 1 ]]; then
+    # Re-wait only when SIGALRM actually interrupted wait. At the timeout
+    # boundary the child may already have exited and been reaped.
+    if [[ "$timed_out" -eq 1 && "$rc" -eq $((128 + 14)) ]]; then
         wait "$pid" 2>/dev/null
         rc=$?
     fi

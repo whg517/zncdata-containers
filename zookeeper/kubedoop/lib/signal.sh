@@ -70,7 +70,10 @@ stop_process() {
 
     wait "$pid" 2>/dev/null
     local rc=$?
-    if [[ "$timed_out" -eq 1 ]]; then
+    # Re-wait only when SIGALRM actually interrupted wait. At the timeout
+    # boundary the child may exit and be reaped just before SIGALRM is handled;
+    # in that case a second wait would return 127 and discard the real status.
+    if [[ "$timed_out" -eq 1 && "$rc" -eq $((128 + 14)) ]]; then
         wait "$pid" 2>/dev/null
         rc=$?
     fi

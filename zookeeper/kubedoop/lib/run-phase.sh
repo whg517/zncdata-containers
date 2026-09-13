@@ -13,7 +13,8 @@
 #   stdout - Null-delimited sorted list of matching script paths, empty if none found
 #
 # Returns:
-#   0 - Always (missing directory is not an error)
+#   0 - Discovery succeeded, or the directory does not exist
+#   1 - find or sort failed
 discover_scripts() {
     local phase_dir="$1"
 
@@ -30,6 +31,12 @@ discover_scripts() {
     find "$phase_dir" -maxdepth 1 -type f -name '*.sh' -executable \
         -uid 0 -print0 \
         | sort -z
+    local -a pipeline_status=("${PIPESTATUS[@]}")
+    if [[ "${pipeline_status[0]}" -ne 0 || "${pipeline_status[1]}" -ne 0 ]]; then
+        return 1
+    fi
+
+    return 0
 }
 
 # Execute all discovered scripts in a phase directory sequentially.
@@ -53,6 +60,30 @@ run_phase() {
 
     local count=0
     local found_any=false
+    local script_list
+
+    # Process substitution hides the producer's exit status from the while loop.
+    # Materialize the null-delimited list first so discovery errors (permission
+    # denied, I/O errors, etc.) fail the phase instead of looking like an empty
+    # directory. KUBEDOOP_RUN_DIR is the writable runtime area in the image.
+    if ! script_list=$(mktemp "${KUBEDOOP_RUN_DIR:-/tmp}/.phase-scripts.XXXXXX"); then
+        log_error "Phase '$phase_name': failed to create script discovery file"
+        return 1
+    fi
+
+    if ! discover_scripts "$phase_dir" > "$script_list"; then
+        log_error "Phase '$phase_name': failed to discover scripts in $phase_dir"
+        rm -f "$script_list"
+        return 1
+    fi
+
+    local script_list_fd
+    if ! exec {script_list_fd}<"$script_list"; then
+        log_error "Phase '$phase_name': failed to read discovered script list"
+        rm -f "$script_list"
+        return 1
+    fi
+    rm -f "$script_list"
 
     while IFS= read -r -d '' script; do
         found_any=true
@@ -65,9 +96,12 @@ run_phase() {
         "$script" || rc=$?
         if [[ $rc -ne 0 ]]; then
             log_error "Phase '$phase_name': $name failed with exit code $rc"
+            exec {script_list_fd}<&-
             return 1
         fi
-    done < <(discover_scripts "$phase_dir")
+    done <&"$script_list_fd"
+
+    exec {script_list_fd}<&-
 
     if [[ "$found_any" == false ]]; then
         log_info "Phase '$phase_name': no scripts found in $phase_dir"

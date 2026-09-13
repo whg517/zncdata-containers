@@ -102,6 +102,14 @@ jobs:
           sign: ${{ github.ref_type == 'tag' }}
           action_debug: 'false' # enable debug for the build-and-push action if needed
 
+      - name: Run entrypoint framework tests
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.PRODUCT_NAME }}:${{ matrix.version }}-kubedoop${{ env.KUBEDOOP_VERSION }}-${{ matrix.arch }}
+        run: |
+          zookeeper/tests/source-entrypoint-framework.sh
+          zookeeper/tests/image-entrypoint-framework.sh "$IMAGE"
+
 
   build-manifest:
     name: Create manifest for ${{ matrix.version }}

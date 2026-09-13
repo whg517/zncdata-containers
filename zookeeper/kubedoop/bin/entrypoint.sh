@@ -52,4 +52,4 @@ if [[ $# -eq 0 ]]; then
 fi
 
 run_lifecycle "$@"
-exit $EXIT_CODE
+exit "$EXIT_CODE"

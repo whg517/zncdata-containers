@@ -143,7 +143,24 @@ EOF
     pass "root-owned executable phase scripts run in sorted order"
 }
 
+test_script_discovery_failure_is_propagated() {
+    local original_discover_scripts
+    original_discover_scripts=$(declare -f discover_scripts)
+
+    discover_scripts() {
+        return 23
+    }
+
+    if run_phase "discovery-failure" "${KUBEDOOP_MOUNT_DIR}/pre-script"; then
+        fail "script discovery failure was reported as success"
+    fi
+
+    eval "$original_discover_scripts"
+    pass "script discovery failure aborts the phase"
+}
+
 test_normal_exit_code
 test_sigterm_is_forwarded
 test_sigkill_after_timeout
 test_root_owned_phase_scripts_when_possible
+test_script_discovery_failure_is_propagated
