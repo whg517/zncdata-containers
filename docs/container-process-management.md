@@ -602,26 +602,35 @@ exit $EXIT_CODE
 ```dockerfile
 # Append to existing kubedoop-base Dockerfile
 
-# Install init system
+# stage: tini-downloader
+# Download and verify the init system in a build stage — the result image only
+# receives the verified binary and never runs download tooling.
 # tini: lightweight init, signal forwarding to direct child, zombie reaping
-# Not available in UBI 9 repos — download static binary from GitHub releases
-# SHA256 checksums are hardcoded in the verification step to prevent --build-arg override
+# Not available in UBI 9 repos — download static binary from GitHub releases.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.6 AS tini-downloader
+
+RUN microdnf install -y curl && microdnf clean all
+
 ARG TARGETARCH
-ADD https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-${TARGETARCH} /tmp/tini
 RUN <<EOF
     set -e
+    curl -sSfL -o /tmp/tini \
+        "https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-${TARGETARCH}"
+
+    # SHA256 checksums are hardcoded in the verification step to prevent --build-arg override
     case "${TARGETARCH}" in
         arm64)  expected_sha="eae1d3aa50c48fb23b8cbdf4e369d0910dfc538566bfd09df89a774aa84a48b9" ;;
         amd64)  expected_sha="c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee" ;;
         *)      echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;;
     esac
     echo "${expected_sha}  /tmp/tini" | sha256sum -c
-    mv /tmp/tini /usr/bin/tini
-    chmod +x /usr/bin/tini
+    chmod +x /tmp/tini
 EOF
 
 # Deploy universal entrypoint framework
 # Framework files: root-owned, world-readable/executable, NOT writable by kubedoop
+COPY --from=tini-downloader /tmp/tini /usr/bin/tini
+
 COPY --chown=root:root kubedoop/lib/ /kubedoop/lib/
 COPY --chown=root:root kubedoop/bin/entrypoint.sh /kubedoop/bin/entrypoint.sh
 RUN chmod -R 0755 /kubedoop/lib/ /kubedoop/bin/ \

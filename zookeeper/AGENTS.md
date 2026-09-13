@@ -6,7 +6,7 @@ Apache ZooKeeper coordination service. Simplest Java product build in the repo.
 
 ## Build Details
 - Build command: `make zookeeper-build`
-- Build stages: single build stage (zookeeper-builder) with Maven `-Pfull-build` profile, applies log4shell patch, then final runtime stage
+- Build stages: zookeeper-builder (Maven `-Pfull-build`, log4shell patch) + tini-downloader (checksum-verified static binary download), then final runtime stage
 - Build system: Maven
 - Base images: java-devel (Java 11) → java-base (Java 17) — unique Java version split
 
@@ -16,8 +16,9 @@ See `versions.yaml` for current values. Structure:
 |-------|-------------|
 | product | ZooKeeper version (e.g. 3.9.3) |
 | java-base | JRE version for runtime image (17) |
-| java-devel | JDK version for builder image (11) |
+| java-devel | JDK version for builder image (11), also used by the tini-downloader stage |
 | jmx-exporter | JMX exporter version |
+| tini | init system version (0.19.0) |
 
 ## Kubedoop Customizations
 ### Patches (1)

@@ -77,32 +77,43 @@ RUN <<EOF
 EOF
 
 
-## final stage
-FROM zncdatadev/image/java-base
-
-ARG PRODUCT_VERSION
-ARG TARGETARCH
-
-WORKDIR /kubedoop
-
-COPY --from=zookeeper-builder --chown=kubedoop:kubedoop /kubedoop/ /kubedoop/
-
-# Install init system
+# stage: tini-downloader
 # tini: lightweight init, signal forwarding to direct child, zombie reaping
-# Not available in UBI 9 repos — download static binary from GitHub releases
-# SHA256 checksums are hardcoded in the verification step to prevent --build-arg override
-ADD https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-${TARGETARCH} /tmp/tini
+# Not available in UBI 9 repos — download static binary from GitHub releases.
+# Download and verification live in this build stage so the result image only
+# receives the verified binary and never runs download tooling.
+FROM zncdatadev/image/java-devel AS tini-downloader
+
+ARG TARGETARCH
+ARG TINI_VERSION
+
 RUN <<EOF
     set -e
+    curl -sSfL -o /tmp/tini \
+        "https://github.com/krallin/tini/releases/download/v${TINI_VERSION}/tini-static-${TARGETARCH}"
+
+    # SHA256 checksums are hardcoded in the verification step to prevent --build-arg override
     case "${TARGETARCH}" in
         arm64)  expected_sha="eae1d3aa50c48fb23b8cbdf4e369d0910dfc538566bfd09df89a774aa84a48b9" ;;
         amd64)  expected_sha="c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee" ;;
         *)      echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;;
     esac
     echo "${expected_sha}  /tmp/tini" | sha256sum -c
-    mv /tmp/tini /usr/bin/tini
-    chmod +x /usr/bin/tini
+    chmod +x /tmp/tini
 EOF
+
+
+## final stage
+FROM zncdatadev/image/java-base
+
+ARG PRODUCT_VERSION
+
+WORKDIR /kubedoop
+
+COPY --from=zookeeper-builder --chown=kubedoop:kubedoop /kubedoop/ /kubedoop/
+
+# Init system, downloaded and checksum-verified in the tini-downloader stage
+COPY --from=tini-downloader /tmp/tini /usr/bin/tini
 
 # Deploy universal entrypoint framework
 # Framework files: root-owned, world-readable/executable, NOT writable by kubedoop
