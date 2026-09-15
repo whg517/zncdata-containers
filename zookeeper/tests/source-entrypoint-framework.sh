@@ -54,12 +54,15 @@ test_normal_exit_code() {
     EXIT_CODE=0
     run_lifecycle bash -c 'exit 7'
     [[ "$EXIT_CODE" -eq 7 ]] || fail "expected normal exit code 7, got ${EXIT_CODE}"
+    run_lifecycle bash -c 'exit 127'
+    [[ "$EXIT_CODE" -eq 127 ]] || fail "expected normal exit code 127, got ${EXIT_CODE}"
     pass "normal main-process exit code is preserved"
 }
 
 test_sigterm_is_forwarded() {
-    local child_ready="${TMP_DIR}/child-ready"
-    local child_term="${TMP_DIR}/child-term"
+    local expected="${1:-42}"
+    local child_ready="${TMP_DIR}/child-ready-${expected}"
+    local child_term="${TMP_DIR}/child-term-${expected}"
 
     (
         source "${LIB_DIR}/log.sh"
@@ -68,10 +71,10 @@ test_sigterm_is_forwarded() {
         KUBEDOOP_KILL_TIMEOUT=2
         KUBEDOOP_MOUNT_DIR="${TMP_DIR}/missing-hooks"
         run_lifecycle bash -c '
-            trap "echo term > \"$1\"; exit 42" TERM
+            trap "echo term > \"$1\"; exit $3" TERM
             echo ready > "$2"
             while :; do sleep 1; done
-        ' bash "$child_term" "$child_ready"
+        ' bash "$child_term" "$child_ready" "$expected"
         exit "$EXIT_CODE"
     ) &
     local lifecycle_pid=$!
@@ -82,7 +85,7 @@ test_sigterm_is_forwarded() {
     local rc=0
     wait "$lifecycle_pid" || rc=$?
 
-    [[ "$rc" -eq 42 ]] || fail "expected lifecycle exit code 42 after forwarded SIGTERM, got ${rc}"
+    [[ "$rc" -eq "$expected" ]] || fail "expected lifecycle exit code ${expected} after forwarded SIGTERM, got ${rc}"
     grep -qx 'term' "$child_term" || fail "child did not receive forwarded SIGTERM"
     pass "SIGTERM is forwarded and child exit code is preserved"
 }
@@ -113,6 +116,20 @@ test_sigkill_after_timeout() {
 
     [[ "$rc" -eq 137 ]] || fail "expected lifecycle exit code 137 after SIGKILL escalation, got ${rc}"
     pass "SIGKILL escalation occurs after KUBEDOOP_KILL_TIMEOUT"
+}
+
+test_exited_child_status_127() {
+    # Cover a child that exits before shutdown reaches stop_process.
+    bash -c 'exit 127' &
+    local child_pid=$!
+    for ((attempt=0; attempt<100; attempt++)); do
+        kill -0 "$child_pid" 2>/dev/null || break
+        sleep 0.01
+    done
+    stop_process "$child_pid" 1
+    [[ "$STOP_REAPED" -eq 1 && "$STOP_EXIT_CODE" -eq 127 ]] ||
+        fail "already-exited child status 127 was lost"
+    pass "status 127 is preserved when the child has already exited"
 }
 
 test_root_owned_scripts_when_possible() {
@@ -161,6 +178,8 @@ test_script_discovery_failure_is_propagated() {
 
 test_normal_exit_code
 test_sigterm_is_forwarded
+test_sigterm_is_forwarded 127
 test_sigkill_after_timeout
+test_exited_child_status_127
 test_root_owned_scripts_when_possible
 test_script_discovery_failure_is_propagated

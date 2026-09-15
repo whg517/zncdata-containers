@@ -149,15 +149,28 @@ log_debug() {
 
 ```bash
 #!/bin/bash
-# /kubedoop/lib/run.sh — Operator-provided lifecycle scripts
+# /kubedoop/lib/run.sh -- Operator-provided lifecycle scripts
 #
 # Executes the scripts operators mount under /kubedoop/mount/:
 #   run_pre_scripts   - ${KUBEDOOP_MOUNT_DIR}/pre-script   (before the main process starts)
 #   run_post_scripts  - ${KUBEDOOP_MOUNT_DIR}/post-script  (after the main process stopped)
+#
+# Depends on: lib/log.sh (loaded via glob in entrypoint)
+#
+# Required global variables:
+#   KUBEDOOP_MOUNT_DIR - Path to mount directory (readonly, set by entrypoint)
 
-# Discover executable scripts in a directory, sorted by filename.
-# Output: null-delimited sorted list of script paths.
-# Returns non-zero if find or sort fails.
+# Discover executable .sh scripts in a directory, sorted by filename.
+#
+# Arguments:
+#   $1 - Directory path to scan
+#
+# Output:
+#   stdout - Null-delimited sorted list of matching script paths, empty if none found
+#
+# Returns:
+#   0 - Discovery succeeded, or the directory does not exist
+#   1 - find or sort failed
 _discover_scripts() {
     local scripts_dir="$1"
 
@@ -171,7 +184,9 @@ _discover_scripts() {
     # With ConfigMap defaultMode: 0755, this correctly matches all executable scripts.
     # SECURITY: Only execute scripts owned by root (uid 0) to prevent injection
     # from non-root writable volumes (emptyDir, PVC, hostPath).
-    find "$scripts_dir" -maxdepth 1 -type f -name '*.sh' -executable \
+    # ConfigMap/projected volumes expose symlinks into ..data. Follow links so
+    # type, ownership and executable checks apply to the target, not the link.
+    find -L "$scripts_dir" -maxdepth 1 -type f -name '*.sh' -executable \
         -uid 0 -print0 \
         | sort -z
     local -a pipeline_status=("${PIPESTATUS[@]}")
@@ -182,8 +197,16 @@ _discover_scripts() {
     return 0
 }
 
-# Run scripts sequentially, in filename sort order.
-# Any script failure aborts the run.
+# Execute all scripts found in a directory sequentially, in filename sort order.
+# First script failure aborts immediately.
+#
+# Arguments:
+#   $1 - Label for logging (e.g., "pre-script", "post-script")
+#   $2 - Directory containing executable .sh scripts
+#
+# Returns:
+#   0 - All scripts succeeded, or no scripts found
+#   1 - A script failed, or script discovery failed
 _run_scripts() {
     local label="$1"
     local scripts_dir="$2"
@@ -196,7 +219,10 @@ _run_scripts() {
     local found_any=false
     local script_list
 
-    # Materialize discovery output so its exit status is observable.
+    # Process substitution hides the producer's exit status from the while loop.
+    # Materialize the null-delimited list first so discovery errors (permission
+    # denied, I/O errors, etc.) fail the run instead of looking like an empty
+    # directory. KUBEDOOP_RUN_DIR is the writable runtime area in the image.
     if ! script_list=$(mktemp "${KUBEDOOP_RUN_DIR:-/tmp}/.scripts.XXXXXX"); then
         log_error "$label: failed to create script discovery file"
         return 1
@@ -216,7 +242,7 @@ _run_scripts() {
     fi
     rm -f "$script_list"
 
-    while IFS= read -r -d '' script; do
+    while IFS= read -r -d '' -u "$script_list_fd" script; do
         found_any=true
         local name
         name=$(basename "$script")
@@ -224,13 +250,14 @@ _run_scripts() {
         count=$((count + 1))
 
         local rc=0
-        "$script" || rc=$?
+        # Hooks are non-interactive and must not consume the discovery stream.
+        "$script" </dev/null {script_list_fd}<&- || rc=$?
         if [[ $rc -ne 0 ]]; then
             log_error "$label: $name failed with exit code $rc"
             exec {script_list_fd}<&-
             return 1
         fi
-    done <&"$script_list_fd"
+    done
 
     exec {script_list_fd}<&-
 
@@ -243,12 +270,22 @@ _run_scripts() {
     return 0
 }
 
-# Operator pre-scripts: run before the main process starts (fail-fast).
+# Execute operator-injected pre-scripts. Runs before the main process starts;
+# a failure makes the caller abort startup (fail-fast).
+#
+# Returns:
+#   0 - All pre-scripts succeeded, or none found
+#   1 - A pre-script failed, or discovery failed
 run_pre_scripts() {
     _run_scripts "pre-script" "${KUBEDOOP_MOUNT_DIR}/pre-script"
 }
 
-# Operator post-scripts: run during shutdown cleanup.
+# Execute operator-injected post-scripts. Runs during shutdown cleanup, after
+# the main process stopped; the caller decides how to handle failure.
+#
+# Returns:
+#   0 - All post-scripts succeeded, or none found
+#   1 - A post-script failed, or discovery failed
 run_post_scripts() {
     _run_scripts "post-script" "${KUBEDOOP_MOUNT_DIR}/post-script"
 }
@@ -258,7 +295,7 @@ run_post_scripts() {
 
 ```bash
 #!/bin/bash
-# /kubedoop/lib/signal.sh — Process lifecycle management
+# /kubedoop/lib/signal.sh -- Process lifecycle management
 #
 # Provides graceful process termination, cleanup orchestration,
 # and full lifecycle management for the universal entrypoint.
@@ -282,8 +319,9 @@ run_post_scripts() {
 #   $2 - Timeout in seconds before SIGKILL escalation
 #
 # Side effects:
-#   Sets STOP_EXIT_CODE to the reaped exit code (empty if PID is empty or already reaped)
-#   Sets STOP_REAPED=1 if the process was reaped, 0 if no PID or already reaped
+#   Caller must supply an owned child whose status has not yet been consumed.
+#   Sets STOP_EXIT_CODE to the child's exit code (including a legitimate 127).
+#   Sets STOP_REAPED=1 after wait, 0 if no PID was supplied.
 stop_process() {
     local pid="$1"
     local timeout="$2"
@@ -300,13 +338,8 @@ stop_process() {
     if ! kill -0 "$pid" 2>/dev/null; then
         wait "$pid" 2>/dev/null
         local rc=$?
-        if [[ $rc -eq 127 ]]; then
-            # Not a child of this shell — already reaped, exit code unknown
-            STOP_REAPED=0
-        else
-            STOP_EXIT_CODE=$rc
-            STOP_REAPED=1
-        fi
+        STOP_EXIT_CODE=$rc
+        STOP_REAPED=1
         return 0
     fi
 
@@ -330,7 +363,8 @@ stop_process() {
     wait "$pid" 2>/dev/null
     local rc=$?
     # Re-wait only when SIGALRM actually interrupted wait. At the timeout
-    # boundary the child may already have exited and been reaped.
+    # boundary the child may exit and be reaped just before SIGALRM is handled;
+    # in that case a second wait would return 127 and discard the real status.
     if [[ "$timed_out" -eq 1 && "$rc" -eq $((128 + 14)) ]]; then
         wait "$pid" 2>/dev/null
         rc=$?
@@ -340,13 +374,8 @@ stop_process() {
     kill "$timer_pid" 2>/dev/null || true
     wait "$timer_pid" 2>/dev/null || true
 
-    if [[ $rc -eq 127 ]]; then
-        # Not a child of this shell — already reaped, exit code unknown
-        STOP_REAPED=0
-    else
-        STOP_EXIT_CODE=$rc
-        STOP_REAPED=1
-    fi
+    STOP_EXIT_CODE=$rc
+    STOP_REAPED=1
 }
 
 # Graceful shutdown handler. Invoked via SIGTERM/SIGINT trap by run_lifecycle.
@@ -357,6 +386,13 @@ stop_process() {
 #   3. Stop main process (SIGTERM → wait → SIGKILL escalation)
 #   4. Capture actual exit code from reap
 #   5. Run post-script phase hooks
+#
+# Environment:
+#   MAIN_PID              - PID of the main process (set by run_lifecycle)
+#   KUBEDOOP_KILL_TIMEOUT - Max seconds to wait before SIGKILL (readonly)
+#
+# Returns:
+#   0 - Always (best-effort cleanup, errors are logged but not propagated)
 cleanup() {
     # Prevent re-entrant execution (trap + fallthrough race)
     if [[ "${_CLEANUP_RUNNING:-0}" -eq 1 ]]; then
@@ -369,11 +405,14 @@ cleanup() {
 
     log_info "Starting shutdown cleanup"
 
-    stop_process "$MAIN_PID" "$KUBEDOOP_KILL_TIMEOUT"
-
-    # Capture real exit code if process was reaped during signal path
-    if [[ "$STOP_REAPED" -eq 1 && -n "$STOP_EXIT_CODE" ]]; then
-        EXIT_CODE="$STOP_EXIT_CODE"
+    # Track reaping explicitly: 127 is a valid application exit status, not
+    # evidence that wait has already consumed the child's status.
+    if [[ "$_MAIN_REAPED" -eq 0 ]]; then
+        stop_process "$MAIN_PID" "$KUBEDOOP_KILL_TIMEOUT"
+        if [[ "$STOP_REAPED" -eq 1 ]]; then
+            EXIT_CODE="$STOP_EXIT_CODE"
+            _MAIN_REAPED=1
+        fi
     fi
 
     log_info "Main process stopped"
@@ -402,6 +441,7 @@ run_lifecycle() {
     EXIT_CODE=0
     _CLEANUP_RUNNING=0
     _PENDING_SIGNAL=0
+    _MAIN_REAPED=0
 
     # Defer signals during process start to close the race where SIGTERM arrives
     # before MAIN_PID is captured (which would run cleanup() with an empty PID).
@@ -422,7 +462,7 @@ run_lifecycle() {
     # Swap the deferring handler for the real cleanup handler.
     trap cleanup SIGTERM SIGINT
 
-    log_info "Main process started (PID: $MAIN_PID): $*"
+    log_info "Main process started (PID: $MAIN_PID)"
 
     # If a signal arrived during the start window, the deferring handler recorded
     # it. Run cleanup now (with a valid MAIN_PID) instead of waiting.
@@ -446,6 +486,7 @@ run_lifecycle() {
     if [[ "${_CLEANUP_RUNNING:-0}" -ne 1 ]]; then
         # Normal exit path: capture the real exit code, then run cleanup hooks.
         EXIT_CODE=$rc
+        _MAIN_REAPED=1
         cleanup
     fi
     # Signal path: cleanup() already ran and set EXIT_CODE — leave it intact.
@@ -555,7 +596,7 @@ wait_for_state() {
 
 ```bash
 #!/bin/bash
-# /kubedoop/bin/entrypoint.sh — Universal container entrypoint
+# /kubedoop/bin/entrypoint.sh -- Universal container entrypoint
 #
 # Note: Uses set -uo pipefail WITHOUT -e.
 # Signal-aware scripts must not use set -e because trap handlers
@@ -591,7 +632,8 @@ for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do
     fi
 done
 
-log_info "Entrypoint starting: $*"
+# Arguments may contain credentials; never include them in framework logs.
+log_info "Entrypoint starting"
 
 # --- Step 1: Operator pre-scripts (auto-discovered from mount) ---
 # Note: pre-script failure prevents main process startup (fail-fast).
@@ -608,7 +650,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 run_lifecycle "$@"
-exit $EXIT_CODE
+exit "$EXIT_CODE"
 ```
 
 ### kubedoop-base/Dockerfile Integration

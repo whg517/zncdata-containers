@@ -35,7 +35,8 @@ for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do
     fi
 done
 
-log_info "Entrypoint starting: $*"
+# Arguments may contain credentials; never include them in framework logs.
+log_info "Entrypoint starting"
 
 # --- Step 1: Operator pre-scripts (auto-discovered from mount) ---
 # Note: pre-script failure prevents main process startup (fail-fast).

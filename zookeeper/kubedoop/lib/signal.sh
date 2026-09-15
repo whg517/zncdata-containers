@@ -23,8 +23,9 @@
 #   $2 - Timeout in seconds before SIGKILL escalation
 #
 # Side effects:
-#   Sets STOP_EXIT_CODE to the reaped exit code (empty if PID is empty or already reaped)
-#   Sets STOP_REAPED=1 if the process was reaped, 0 if no PID or already reaped
+#   Caller must supply an owned child whose status has not yet been consumed.
+#   Sets STOP_EXIT_CODE to the child's exit code (including a legitimate 127).
+#   Sets STOP_REAPED=1 after wait, 0 if no PID was supplied.
 stop_process() {
     local pid="$1"
     local timeout="$2"
@@ -41,13 +42,8 @@ stop_process() {
     if ! kill -0 "$pid" 2>/dev/null; then
         wait "$pid" 2>/dev/null
         local rc=$?
-        if [[ $rc -eq 127 ]]; then
-            # Not a child of this shell — already reaped, exit code unknown
-            STOP_REAPED=0
-        else
-            STOP_EXIT_CODE=$rc
-            STOP_REAPED=1
-        fi
+        STOP_EXIT_CODE=$rc
+        STOP_REAPED=1
         return 0
     fi
 
@@ -82,13 +78,8 @@ stop_process() {
     kill "$timer_pid" 2>/dev/null || true
     wait "$timer_pid" 2>/dev/null || true
 
-    if [[ $rc -eq 127 ]]; then
-        # Not a child of this shell — already reaped, exit code unknown
-        STOP_REAPED=0
-    else
-        STOP_EXIT_CODE=$rc
-        STOP_REAPED=1
-    fi
+    STOP_EXIT_CODE=$rc
+    STOP_REAPED=1
 }
 
 # Graceful shutdown handler. Invoked via SIGTERM/SIGINT trap by run_lifecycle.
@@ -118,11 +109,14 @@ cleanup() {
 
     log_info "Starting shutdown cleanup"
 
-    stop_process "$MAIN_PID" "$KUBEDOOP_KILL_TIMEOUT"
-
-    # Capture real exit code if process was reaped during signal path
-    if [[ "$STOP_REAPED" -eq 1 && -n "$STOP_EXIT_CODE" ]]; then
-        EXIT_CODE="$STOP_EXIT_CODE"
+    # Track reaping explicitly: 127 is a valid application exit status, not
+    # evidence that wait has already consumed the child's status.
+    if [[ "$_MAIN_REAPED" -eq 0 ]]; then
+        stop_process "$MAIN_PID" "$KUBEDOOP_KILL_TIMEOUT"
+        if [[ "$STOP_REAPED" -eq 1 ]]; then
+            EXIT_CODE="$STOP_EXIT_CODE"
+            _MAIN_REAPED=1
+        fi
     fi
 
     log_info "Main process stopped"
@@ -151,6 +145,7 @@ run_lifecycle() {
     EXIT_CODE=0
     _CLEANUP_RUNNING=0
     _PENDING_SIGNAL=0
+    _MAIN_REAPED=0
 
     # Defer signals during process start to close the race where SIGTERM arrives
     # before MAIN_PID is captured (which would run cleanup() with an empty PID).
@@ -171,7 +166,7 @@ run_lifecycle() {
     # Swap the deferring handler for the real cleanup handler.
     trap cleanup SIGTERM SIGINT
 
-    log_info "Main process started (PID: $MAIN_PID): $*"
+    log_info "Main process started (PID: $MAIN_PID)"
 
     # If a signal arrived during the start window, the deferring handler recorded
     # it. Run cleanup now (with a valid MAIN_PID) instead of waiting.
@@ -195,6 +190,7 @@ run_lifecycle() {
     if [[ "${_CLEANUP_RUNNING:-0}" -ne 1 ]]; then
         # Normal exit path: capture the real exit code, then run cleanup hooks.
         EXIT_CODE=$rc
+        _MAIN_REAPED=1
         cleanup
     fi
     # Signal path: cleanup() already ran and set EXIT_CODE — leave it intact.

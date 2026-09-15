@@ -34,7 +34,9 @@ _discover_scripts() {
     # With ConfigMap defaultMode: 0755, this correctly matches all executable scripts.
     # SECURITY: Only execute scripts owned by root (uid 0) to prevent injection
     # from non-root writable volumes (emptyDir, PVC, hostPath).
-    find "$scripts_dir" -maxdepth 1 -type f -name '*.sh' -executable \
+    # ConfigMap/projected volumes expose symlinks into ..data. Follow links so
+    # type, ownership and executable checks apply to the target, not the link.
+    find -L "$scripts_dir" -maxdepth 1 -type f -name '*.sh' -executable \
         -uid 0 -print0 \
         | sort -z
     local -a pipeline_status=("${PIPESTATUS[@]}")
@@ -90,7 +92,7 @@ _run_scripts() {
     fi
     rm -f "$script_list"
 
-    while IFS= read -r -d '' script; do
+    while IFS= read -r -d '' -u "$script_list_fd" script; do
         found_any=true
         local name
         name=$(basename "$script")
@@ -98,13 +100,14 @@ _run_scripts() {
         count=$((count + 1))
 
         local rc=0
-        "$script" || rc=$?
+        # Hooks are non-interactive and must not consume the discovery stream.
+        "$script" </dev/null {script_list_fd}<&- || rc=$?
         if [[ $rc -ne 0 ]]; then
             log_error "$label: $name failed with exit code $rc"
             exec {script_list_fd}<&-
             return 1
         fi
-    done <&"$script_list_fd"
+    done
 
     exec {script_list_fd}<&-
 
