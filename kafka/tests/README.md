@@ -38,6 +38,12 @@ signals during shutdown/post-hooks, SIGKILL escalation, and omission of command
 arguments from logs. Hooks use `/dev/null` for stdin; use explicit files or env
 variables for their input.
 
+Assertions check the full pre-hook/main/post-hook execution order and fail on a
+missing phase marker. Broker CLI deadlines run inside the container, so slow or
+unresponsive client commands are terminated rather than accumulating across
+readiness retries; a regression checks both ordinary and SIGTERM-ignoring
+commands.
+
 The broker test builds a disposable derived image with test-only hooks and an
 explicit single-node KRaft configuration, compatible with all four supported
 versions. It formats only an empty test data directory, creates a topic,

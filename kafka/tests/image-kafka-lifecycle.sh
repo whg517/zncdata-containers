@@ -15,6 +15,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+exec_with_timeout() {
+    local seconds="$1"
+    shift
+    # A host-only timeout kills the Docker client but leaves docker exec's JVM
+    # running. Enforce the deadline inside the container, with a longer outer
+    # watchdog for an unresponsive Docker API. Preserve stdin for the producer.
+    timeout --kill-after=2 "$((seconds + 10))" docker exec -i "$CID" \
+        timeout --kill-after=2 "$seconds" "$@"
+}
+
 fail() {
     if [[ -n "$CID" ]]; then docker logs "$CID" --tail 80 >&2 || true; fi
     echo "not ok - $*" >&2
@@ -25,7 +35,7 @@ wait_for_broker() {
     local attempt
     for ((attempt=0; attempt<12; attempt++)); do
         [[ "$(docker inspect -f '{{.State.Running}}' "$CID")" == true ]] || fail "broker exited before readiness"
-        if timeout 10 docker exec "$CID" kafka-topics.sh --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1; then
+        if exec_with_timeout 10 kafka-topics.sh --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1; then
             return 0
         fi
         sleep 1
@@ -35,10 +45,27 @@ wait_for_broker() {
 
 read_messages() {
     local output
-    output=$(timeout 30 docker exec "$CID" kafka-console-consumer.sh \
+    output=$(exec_with_timeout 30 kafka-console-consumer.sh \
         --bootstrap-server 127.0.0.1:9092 --topic lifecycle-test \
         --from-beginning --max-messages 2 --timeout-ms 20000 2>/dev/null) || fail "failed to consume messages"
     [[ "$output" == $'lifecycle-first\nlifecycle-second' ]] || fail "message content or order changed: $output"
+}
+
+test_cli_timeout() {
+    local pid rc expected mode
+    for mode in normal ignore-term; do
+        rc=0
+        pid=$(exec_with_timeout 1 bash -c '
+            if [[ "$1" == ignore-term ]]; then trap "" TERM; fi
+            echo $$
+            exec sleep 60
+        ' bash "$mode") || rc=$?
+        expected=124
+        if [[ "$mode" == ignore-term ]]; then expected=137; fi
+        [[ "$rc" == "$expected" && "$pid" =~ ^[0-9]+$ ]] || fail "CLI timeout did not enforce its deadline ($mode, status $rc)"
+        docker exec "$CID" bash -c '! kill -0 "$1" 2>/dev/null' bash "$pid" || fail "timed-out CLI process remained running ($mode)"
+    done
+    echo 'ok - CLI deadlines terminate container processes, including SIGTERM-ignoring commands'
 }
 
 stop_and_check() {
@@ -66,9 +93,10 @@ EOF
 docker build -q -t "$TEST_IMAGE" "$TMP_DIR" >/dev/null || fail "failed to build broker test image"
 CID=$(docker run -d "$TEST_IMAGE") || fail "failed to start broker"
 wait_for_broker
-timeout 30 docker exec "$CID" kafka-topics.sh --bootstrap-server 127.0.0.1:9092 \
+test_cli_timeout
+exec_with_timeout 30 kafka-topics.sh --bootstrap-server 127.0.0.1:9092 \
     --create --topic lifecycle-test --partitions 1 --replication-factor 1 >/dev/null || fail "failed to create topic"
-printf 'lifecycle-first\nlifecycle-second\n' | timeout 30 docker exec -i "$CID" kafka-console-producer.sh \
+printf 'lifecycle-first\nlifecycle-second\n' | exec_with_timeout 30 kafka-console-producer.sh \
     --bootstrap-server 127.0.0.1:9092 --topic lifecycle-test || fail "failed to produce messages"
 read_messages
 metadata_before=$(docker exec "$CID" sha256sum /kubedoop/run/data/meta.properties)

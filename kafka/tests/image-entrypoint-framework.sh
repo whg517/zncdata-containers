@@ -154,7 +154,7 @@ EOF
     cat >"${TMP_DIR}/scripts/10-post.sh" <<'EOF'
 #!/bin/bash
 set -uo pipefail
-test -f /kubedoop/run/pre-script-marker
+test -f /kubedoop/run/pre-script-marker || exit 1
 if [[ "${TEST_FAIL_POST:-false}" == true ]]; then exit 23; fi
 if [[ "${TEST_REQUIRE_CHILD_CLEANUP:-false}" == true ]]; then
     test -f /kubedoop/run/child-cleanup-done || exit 1
@@ -196,7 +196,7 @@ test_root_owned_scripts_execute() {
 
     local output
     output=$(docker run --rm "$TEST_IMAGE" bash -c '
-        test -f /kubedoop/run/pre-script-marker
+        test -f /kubedoop/run/pre-script-marker || exit 1
         echo TEST_MAIN_RAN
     ' 2>&1) || {
         echo "$output" >&2
@@ -207,6 +207,9 @@ test_root_owned_scripts_execute() {
     assert_contains "$output" "TEST_SECOND_PRE_SCRIPT_RAN" "stdin-reading pre-script skipped the next script"
     assert_contains "$output" "TEST_MAIN_RAN" "main command did not run after pre-script"
     assert_contains "$output" "TEST_POST_SCRIPT_RAN" "post-script did not run"
+    local order
+    order=$(grep -E '^(TEST_PRE_SCRIPT_RAN|TEST_SECOND_PRE_SCRIPT_RAN|TEST_MAIN_RAN|TEST_POST_SCRIPT_RAN)$' <<< "$output")
+    [[ "$order" == $'TEST_PRE_SCRIPT_RAN\nTEST_SECOND_PRE_SCRIPT_RAN\nTEST_MAIN_RAN\nTEST_POST_SCRIPT_RAN' ]] || fail "hooks and main command ran out of order or more than once"
     pass "ConfigMap-style pre/post scripts execute; stdin readers do not skip the next script"
 }
 
