@@ -137,4 +137,4 @@ USER kubedoop
 # No -g flag: tini forwards signals only to direct child process.
 # The entrypoint.sh manages signal propagation explicitly via trap.
 ENTRYPOINT ["tini", "--", "/kubedoop/bin/entrypoint.sh"]
-CMD ["bin/zkServer.sh", "start-foreground", "config/zoo_sample.cfg"]
+CMD ["bin/zkServer.sh", "start-foreground", "conf/zoo_sample.cfg"]

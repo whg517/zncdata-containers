@@ -103,7 +103,7 @@ test_entrypoint_metadata() {
         "$IMAGE")
 
     assert_contains "$metadata" '["tini","--","/kubedoop/bin/entrypoint.sh"]' "unexpected image ENTRYPOINT"
-    assert_contains "$metadata" '["bin/zkServer.sh","start-foreground","config/zoo_sample.cfg"]' "unexpected image CMD"
+    assert_contains "$metadata" '["bin/zkServer.sh","start-foreground","conf/zoo_sample.cfg"]' "unexpected image CMD"
     assert_contains "$metadata" 'kubedoop' "unexpected image USER"
     pass "image metadata wires tini and the universal entrypoint"
 }
@@ -131,6 +131,33 @@ test_exit_code_propagation() {
     pass "entrypoint preserves main process exit code"
 }
 
+test_main_stdin_is_preserved() {
+    local output
+    output=$(printf '%s\n' TEST_MAIN_STDIN | docker run --rm -i "$IMAGE" cat) || fail "stdin test failed"
+    grep -qx TEST_MAIN_STDIN <<< "$output" || fail "main process did not receive stdin through the entrypoint"
+    pass "main process receives docker run -i input"
+}
+
+test_default_command_starts_zookeeper() {
+    local cid output
+    cid=$(docker run -d "$IMAGE") || fail "failed to start the default command"
+    CONTAINER_IDS+=("$cid")
+    wait_for_log "$cid" "PrepRequestProcessor (sid:0) started" 30 || fail "default command did not start ZooKeeper"
+
+    # Verify a real client can read the root znode, not just a listening socket.
+    output=$(printf 'ls /\nquit\n' | timeout 20 docker exec -i "$cid" bin/zkCli.sh -server 127.0.0.1:2181 2>&1) || fail "ZooKeeper client could not connect"
+    assert_contains "$output" "SyncConnected" "ZooKeeper did not establish a client session"
+    assert_contains "$output" "[zookeeper]" "ZooKeeper did not return the root znode's children"
+    docker stop -t 35 "$cid" >/dev/null || fail "failed to stop ZooKeeper"
+    [[ "$(docker inspect -f '{{.State.ExitCode}}' "$cid")" == 143 ]] || fail "ZooKeeper default command did not retain its SIGTERM exit status"
+    output=$(docker logs "$cid" 2>&1)
+    assert_contains "$output" "Shutdown complete" "ZooKeeper shutdown cleanup did not finish"
+    if grep -Fq 'sending SIGKILL' <<< "$output"; then
+        fail "ZooKeeper needed SIGKILL instead of graceful shutdown"
+    fi
+    pass "default command starts ZooKeeper, serves a client, and shuts down gracefully"
+}
+
 build_script_test_image() {
     TEST_IMAGE="zookeeper-entrypoint-test:$(date +%s)-$$"
     mkdir -p "${TMP_DIR}/scripts"
@@ -147,6 +174,13 @@ EOF
 #!/bin/bash
 set -uo pipefail
 test -f /kubedoop/run/pre-script-marker
+if [[ "${TEST_REQUIRE_CHILD_CLEANUP:-false}" == true ]]; then
+    test -f /kubedoop/run/child-cleanup-done || exit 1
+fi
+if [[ "${TEST_WAIT_POST:-false}" == true ]]; then
+    echo TEST_POST_STARTED
+    while [[ ! -e /kubedoop/run/post-release ]]; do sleep 0.05; done
+fi
 echo TEST_POST_SCRIPT_RAN
 EOF
 
@@ -235,6 +269,44 @@ test_sigkill_after_timeout() {
     pass "SIGKILL escalation works in the final image"
 }
 
+test_signals_during_cleanup() {
+    local mode="$1"
+    local cid expected output
+    if [[ "$mode" == signal ]]; then
+        expected=42
+        cid=$(docker run -d -e KUBEDOOP_KILL_TIMEOUT=10 -e TEST_WAIT_POST=true \
+            -e TEST_REQUIRE_CHILD_CLEANUP=true "$TEST_IMAGE" bash -c '
+                trap '\''echo TEST_CHILD_TERM; while [[ ! -e /kubedoop/run/child-release ]]; do sleep 0.05; done; touch /kubedoop/run/child-cleanup-done; exit 42'\'' TERM
+                echo TEST_CHILD_READY
+                while :; do sleep 0.05; done
+            ') || fail "failed to start cleanup signal test"
+    else
+        expected=7
+        cid=$(docker run -d -e TEST_WAIT_POST=true "$TEST_IMAGE" bash -c 'exit 7') || fail "failed to start normal cleanup test"
+    fi
+    CONTAINER_IDS+=("$cid")
+
+    if [[ "$mode" == signal ]]; then
+        wait_for_log "$cid" TEST_CHILD_READY || fail "cleanup test child did not become ready"
+        docker kill --signal TERM "$cid" >/dev/null || fail "initial SIGTERM failed"
+        wait_for_log "$cid" TEST_CHILD_TERM || fail "child did not receive SIGTERM"
+        docker kill --signal TERM "$cid" >/dev/null || fail "repeated SIGTERM failed"
+        docker kill --signal INT "$cid" >/dev/null || fail "repeated SIGINT failed"
+        docker exec "$cid" touch /kubedoop/run/child-release || fail "child cleanup was interrupted"
+    fi
+    wait_for_log "$cid" TEST_POST_STARTED || fail "post-script did not start"
+    docker kill --signal TERM "$cid" >/dev/null || fail "SIGTERM during post-script failed"
+    docker kill --signal INT "$cid" >/dev/null || fail "SIGINT during post-script failed"
+    docker exec "$cid" touch /kubedoop/run/post-release || fail "post-script was interrupted"
+
+    output=$(timeout 15 docker wait "$cid") || fail "cleanup did not finish"
+    [[ "$output" == "$expected" ]] || fail "expected cleanup exit code ${expected}, got ${output}"
+    output=$(docker logs "$cid" 2>&1)
+    [[ "$(grep -xc TEST_POST_SCRIPT_RAN <<< "$output")" == 1 ]] || fail "post-script did not finish exactly once"
+    assert_contains "$output" "Shutdown complete" "shutdown cleanup was interrupted"
+    pass "SIGTERM/SIGINT do not interrupt ${mode}-driven application or post-script cleanup"
+}
+
 test_arguments_are_not_logged() {
     local debug output
     for debug in false true; do
@@ -273,9 +345,13 @@ test_image_exists
 test_entrypoint_metadata
 test_runtime_files_and_user
 test_exit_code_propagation
+test_main_stdin_is_preserved
+test_default_command_starts_zookeeper
 test_root_owned_scripts_execute
 test_sigterm_is_forwarded
 test_sigterm_is_forwarded 127
 test_sigkill_after_timeout
+test_signals_during_cleanup signal
+test_signals_during_cleanup normal
 test_arguments_are_not_logged
 test_link_target_permissions

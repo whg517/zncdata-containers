@@ -37,3 +37,9 @@ another hook, status 127 on normal and signal-driven exits, and omission of
 command arguments from logs in both normal and debug mode. Hooks receive
 `/dev/null` as stdin; they must use explicit files or environment variables for
 input.
+
+The suite also checks that the main command retains stdin, that repeated
+SIGTERM/SIGINT signals cannot interrupt application shutdown or post-scripts,
+and that post-scripts run exactly once while preserving the application's exit
+status. The default-CMD smoke test starts ZooKeeper without overriding its
+command, reads the root znode with `zkCli.sh`, and checks graceful shutdown.

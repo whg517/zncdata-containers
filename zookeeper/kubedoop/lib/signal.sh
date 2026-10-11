@@ -64,15 +64,21 @@ stop_process() {
 
     trap 'timed_out=1; log_warn "Main process did not exit in ${timeout}s, sending SIGKILL"; kill -KILL "$pid" 2>/dev/null || true' SIGALRM
 
-    wait "$pid" 2>/dev/null
-    local rc=$?
-    # Re-wait only when SIGALRM actually interrupted wait. At the timeout
-    # boundary the child may exit and be reaped just before SIGALRM is handled;
-    # in that case a second wait would return 127 and discard the real status.
-    if [[ "$timed_out" -eq 1 && "$rc" -eq $((128 + 14)) ]]; then
+    local rc=0
+    while :; do
+        timed_out=0
+        _CLEANUP_INTERRUPTED=0
         wait "$pid" 2>/dev/null
         rc=$?
-    fi
+        # A handled signal interrupts Bash's wait without consuming the child's
+        # status. Keep waiting after repeated shutdown signals or the timeout
+        # alarm, but preserve real application exit codes (including 130/142/143).
+        if [[ "$timed_out" -eq 1 && "$rc" -eq $((128 + 14)) ]] ||
+            [[ "$_CLEANUP_INTERRUPTED" -eq 1 && ( "$rc" -eq 130 || "$rc" -eq 143 ) ]]; then
+            continue
+        fi
+        break
+    done
 
     trap - SIGALRM
     kill "$timer_pid" 2>/dev/null || true
@@ -86,7 +92,7 @@ stop_process() {
 #
 # Steps:
 #   1. Guard against re-entrant execution
-#   2. Disarm signal traps to prevent nested handler execution
+#   2. Keep handling shutdown signals without re-entering cleanup
 #   3. Stop main process (SIGTERM → wait → SIGKILL escalation)
 #   4. Capture actual exit code from reap
 #   5. Run post-script phase hooks
@@ -100,12 +106,13 @@ stop_process() {
 cleanup() {
     # Prevent re-entrant execution (trap + fallthrough race)
     if [[ "${_CLEANUP_RUNNING:-0}" -eq 1 ]]; then
+        _CLEANUP_INTERRUPTED=1
         return 0
     fi
     _CLEANUP_RUNNING=1
 
-    # Disarm signal traps during cleanup to prevent nested handler execution
-    trap - SIGTERM SIGINT
+    # Leave the real handler installed: restoring SIG_DFL would abort cleanup
+    # on another signal; SIG_IGN would also be inherited by post-script hooks.
 
     log_info "Starting shutdown cleanup"
 
@@ -144,6 +151,7 @@ run_lifecycle() {
     MAIN_PID=""
     EXIT_CODE=0
     _CLEANUP_RUNNING=0
+    _CLEANUP_INTERRUPTED=0
     _PENDING_SIGNAL=0
     _MAIN_REAPED=0
 
@@ -161,7 +169,9 @@ run_lifecycle() {
     trap '_PENDING_SIGNAL=1' SIGTERM SIGINT
 
     # Start process and capture PID atomically (same logical line as backgrounding)
-    "$@" & MAIN_PID=$!
+    # Explicit redirection preserves stdin; otherwise non-interactive Bash
+    # connects a background command's stdin to /dev/null.
+    "$@" <&0 & MAIN_PID=$!
 
     # Swap the deferring handler for the real cleanup handler.
     trap cleanup SIGTERM SIGINT

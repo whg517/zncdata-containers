@@ -51,12 +51,67 @@ KUBEDOOP_MOUNT_DIR="${TMP_DIR}/mount"
 mkdir -p "${KUBEDOOP_MOUNT_DIR}/pre-script" "${KUBEDOOP_MOUNT_DIR}/post-script"
 
 test_normal_exit_code() {
-    EXIT_CODE=0
-    run_lifecycle bash -c 'exit 7'
-    [[ "$EXIT_CODE" -eq 7 ]] || fail "expected normal exit code 7, got ${EXIT_CODE}"
-    run_lifecycle bash -c 'exit 127'
-    [[ "$EXIT_CODE" -eq 127 ]] || fail "expected normal exit code 127, got ${EXIT_CODE}"
+    local expected
+    for expected in 7 127 130 142 143; do
+        run_lifecycle bash -c 'exit "$1"' bash "$expected"
+        [[ "$EXIT_CODE" -eq "$expected" ]] || fail "expected normal exit code ${expected}, got ${EXIT_CODE}"
+    done
     pass "normal main-process exit code is preserved"
+}
+
+test_main_stdin_is_preserved() {
+    local output
+    output=$(run_lifecycle cat <<< 'TEST_MAIN_STDIN')
+    grep -qx TEST_MAIN_STDIN <<< "$output" || fail "main process did not receive stdin"
+    pass "background main process preserves stdin"
+}
+
+test_signals_during_cleanup() {
+    local mode="$1"
+    local markers="${TMP_DIR}/cleanup-${mode}"
+    mkdir -p "$markers"
+
+    (
+        KUBEDOOP_KILL_TIMEOUT=10
+        run_post_scripts() {
+            touch "$markers/post-started"
+            while [[ ! -e "$markers/post-release" ]]; do sleep 0.05; done
+            echo post >> "$markers/post-done"
+        }
+        if [[ "$mode" == signal ]]; then
+            run_lifecycle bash -c '
+                trap '\''touch "$1/child-term"; while [[ ! -e "$1/child-release" ]]; do sleep 0.05; done; touch "$1/child-done"; exit 42'\'' TERM
+                touch "$1/child-ready"
+                while :; do sleep 0.05; done
+            ' bash "$markers"
+        else
+            run_lifecycle bash -c 'exit 7'
+        fi
+        exit "$EXIT_CODE"
+    ) &
+    local lifecycle_pid=$!
+
+    if [[ "$mode" == signal ]]; then
+        wait_for_file "$markers/child-ready" || fail "child did not become ready"
+        kill -TERM "$lifecycle_pid"
+        wait_for_file "$markers/child-term" || fail "child did not receive initial SIGTERM"
+        kill -TERM "$lifecycle_pid"
+        touch "$markers/child-release"
+    fi
+    wait_for_file "$markers/post-started" || fail "post-script did not start"
+    kill -TERM "$lifecycle_pid"
+    touch "$markers/post-release"
+
+    local rc=0
+    wait "$lifecycle_pid" || rc=$?
+    local expected=7
+    if [[ "$mode" == signal ]]; then
+        expected=42
+        [[ -e "$markers/child-done" ]] || fail "child cleanup was interrupted"
+    fi
+    [[ "$rc" -eq "$expected" ]] || fail "cleanup signal changed exit code ${expected} to ${rc}"
+    [[ "$(wc -l < "$markers/post-done")" -eq 1 ]] || fail "post-script did not finish exactly once"
+    pass "shutdown signals do not interrupt ${mode}-driven cleanup"
 }
 
 test_sigterm_is_forwarded() {
@@ -177,8 +232,11 @@ test_script_discovery_failure_is_propagated() {
 }
 
 test_normal_exit_code
+test_main_stdin_is_preserved
 test_sigterm_is_forwarded
 test_sigterm_is_forwarded 127
+test_signals_during_cleanup signal
+test_signals_during_cleanup normal
 test_sigkill_after_timeout
 test_exited_child_status_127
 test_root_owned_scripts_when_possible
