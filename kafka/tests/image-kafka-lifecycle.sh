@@ -1,0 +1,82 @@
+#!/bin/bash
+# Real KRaft broker acceptance: hook initialization, messages, shutdown, restart.
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+IMAGE="${1:?usage: image-kafka-lifecycle.sh IMAGE}"
+TEST_IMAGE="kafka-broker-lifecycle-test:$(date +%s)-$$"
+TMP_DIR=$(mktemp -d)
+CID=""
+
+cleanup() {
+    if [[ -n "$CID" ]]; then docker rm -f "$CID" >/dev/null 2>&1 || true; fi
+    docker image rm "$TEST_IMAGE" >/dev/null 2>&1 || true
+    rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+fail() {
+    if [[ -n "$CID" ]]; then docker logs "$CID" --tail 80 >&2 || true; fi
+    echo "not ok - $*" >&2
+    exit 1
+}
+
+wait_for_broker() {
+    local attempt
+    for ((attempt=0; attempt<12; attempt++)); do
+        [[ "$(docker inspect -f '{{.State.Running}}' "$CID")" == true ]] || fail "broker exited before readiness"
+        if timeout 10 docker exec "$CID" kafka-topics.sh --bootstrap-server 127.0.0.1:9092 --list >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    fail "broker did not become ready"
+}
+
+read_messages() {
+    local output
+    output=$(timeout 30 docker exec "$CID" kafka-console-consumer.sh \
+        --bootstrap-server 127.0.0.1:9092 --topic lifecycle-test \
+        --from-beginning --max-messages 2 --timeout-ms 20000 2>/dev/null) || fail "failed to consume messages"
+    [[ "$output" == $'lifecycle-first\nlifecycle-second' ]] || fail "message content or order changed: $output"
+}
+
+stop_and_check() {
+    local expected_runs="$1" output
+    docker stop -t 40 "$CID" >/dev/null || fail "docker stop failed"
+    [[ "$(docker inspect -f '{{.State.ExitCode}}' "$CID")" == 143 ]] || fail "broker exit status was not preserved"
+    output=$(docker logs "$CID" 2>&1)
+    [[ "$(grep -xc TEST_KAFKA_POST_DONE <<< "$output")" == "$expected_runs" ]] || fail "post-script did not run after broker shutdown"
+    [[ "$(grep -c '\[kubedoop\] \[INFO\] Shutdown complete$' <<< "$output")" == "$expected_runs" ]] || fail "framework cleanup did not finish exactly once"
+    if grep -Fq 'sending SIGKILL' <<< "$output"; then fail "broker required SIGKILL escalation"; fi
+}
+
+cp "$SCRIPT_DIR"/fixtures/* "$TMP_DIR/"
+cat > "$TMP_DIR/Dockerfile" <<EOF
+FROM ${IMAGE}
+USER root
+COPY --chown=root:root server.properties /kubedoop/run/server.properties
+COPY --chown=root:root 10-format.sh /kubedoop/mount/pre-script/10-format.sh
+COPY --chown=root:root 10-check-stopped.sh /kubedoop/mount/post-script/10-check-stopped.sh
+RUN chmod 0755 /kubedoop/mount/pre-script/10-format.sh /kubedoop/mount/post-script/10-check-stopped.sh
+USER kubedoop
+ENV KAFKA_HEAP_OPTS="-Xms256m -Xmx512m"
+CMD ["kafka-server-start.sh", "/kubedoop/run/server.properties"]
+EOF
+docker build -q -t "$TEST_IMAGE" "$TMP_DIR" >/dev/null || fail "failed to build broker test image"
+CID=$(docker run -d "$TEST_IMAGE") || fail "failed to start broker"
+wait_for_broker
+timeout 30 docker exec "$CID" kafka-topics.sh --bootstrap-server 127.0.0.1:9092 \
+    --create --topic lifecycle-test --partitions 1 --replication-factor 1 >/dev/null || fail "failed to create topic"
+printf 'lifecycle-first\nlifecycle-second\n' | timeout 30 docker exec -i "$CID" kafka-console-producer.sh \
+    --bootstrap-server 127.0.0.1:9092 --topic lifecycle-test || fail "failed to produce messages"
+read_messages
+metadata_before=$(docker exec "$CID" sha256sum /kubedoop/run/data/meta.properties)
+stop_and_check 1
+docker start "$CID" >/dev/null || fail "failed to restart broker"
+wait_for_broker
+read_messages
+metadata_after=$(docker exec "$CID" sha256sum /kubedoop/run/data/meta.properties)
+[[ "$metadata_before" == "$metadata_after" ]] || fail "KRaft identity changed after restart"
+stop_and_check 2
+echo 'ok - Kafka starts via hooks, produces/consumes messages, stops gracefully, and retains identity/messages after restart'

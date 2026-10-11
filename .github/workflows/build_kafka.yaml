@@ -11,7 +11,7 @@ on:
     branches:
       - main
     tags:
-        - '\d+.\d+.\d+*'
+        - '[0-9]+.[0-9]+.[0-9]+*'
     paths:
       - kafka/**
       - kubedoop-base/**
@@ -101,6 +101,15 @@ jobs:
           push: ${{ github.event_name == 'push' }}
           sign: ${{ github.ref_type == 'tag' }}
           action_debug: 'false' # enable debug for the build-and-push action if needed
+
+      - name: Run Kafka lifecycle tests
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.PRODUCT_NAME }}:${{ matrix.version }}-kubedoop${{ env.KUBEDOOP_VERSION }}-${{ matrix.arch }}
+        run: |
+          kafka/tests/source-entrypoint-framework.sh
+          kafka/tests/image-entrypoint-framework.sh "$IMAGE"
+          kafka/tests/image-kafka-lifecycle.sh "$IMAGE"
 
 
   build-manifest:
