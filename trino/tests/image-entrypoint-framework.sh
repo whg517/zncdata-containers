@@ -147,8 +147,10 @@ test_exit_code_propagation() {
 test_main_stdin_is_preserved() {
     local output
     output=$(printf '%s\n' TEST_MAIN_STDIN | docker run --rm -i "$IMAGE" cat) || fail "stdin test failed"
-    grep -qx TEST_MAIN_STDIN <<< "$output" || fail "main process did not receive stdin through the entrypoint"
-    pass "main process receives docker run -i input"
+    [[ "$output" == TEST_MAIN_STDIN ]] || fail "main stdin/stdout was changed by the entrypoint"
+    output=$(docker run --rm -e KUBEDOOP_DEBUG=true "$IMAGE" bash -c 'printf "%s\\n" "{\"value\":42}"') || fail "structured stdout test failed"
+    [[ "$output" == '{"value":42}' ]] || fail "framework diagnostics polluted structured stdout"
+    pass "main stdin and structured stdout are preserved"
 }
 
 build_script_test_image() {

@@ -29,6 +29,8 @@ The framework suite covers root-owned ConfigMap symlinks, hook ordering and
 failure propagation, stdin, real application exit codes, repeated signals,
 SIGKILL escalation, and command-argument redaction. Hooks are non-interactive
 and receive `/dev/null` stdin.
+Framework diagnostics use stderr. Without injected hook output, the main
+command's stdout stays machine-readable, including when debug logging is enabled.
 
 The application suite creates a disposable derived image with test-only
 configuration, hooks and a TPCH catalog. It runs the unchanged default CMD,

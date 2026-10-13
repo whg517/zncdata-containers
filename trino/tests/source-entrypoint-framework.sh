@@ -62,8 +62,20 @@ test_normal_exit_code() {
 test_main_stdin_is_preserved() {
     local output
     output=$(run_lifecycle cat <<< 'TEST_MAIN_STDIN')
-    grep -qx TEST_MAIN_STDIN <<< "$output" || fail "main process did not receive stdin"
-    pass "background main process preserves stdin"
+    [[ "$output" == TEST_MAIN_STDIN ]] || fail "main stdin/stdout was changed by the framework"
+    pass "background main process preserves stdin and clean stdout"
+}
+
+test_logging_uses_stderr() {
+    local output stderr_file="${TMP_DIR}/framework-stderr"
+    output=$({
+        log_info TEST_INFO_DIAGNOSTIC
+        KUBEDOOP_DEBUG=true log_debug TEST_DEBUG_DIAGNOSTIC
+    } 2>"$stderr_file")
+    [[ -z "$output" ]] || fail "framework diagnostics polluted stdout"
+    grep -Fq '[INFO] TEST_INFO_DIAGNOSTIC' "$stderr_file" || fail "INFO diagnostic missing from stderr"
+    grep -Fq '[DEBUG] TEST_DEBUG_DIAGNOSTIC' "$stderr_file" || fail "DEBUG diagnostic missing from stderr"
+    pass "INFO and DEBUG diagnostics use stderr"
 }
 
 test_signals_during_cleanup() {
@@ -256,6 +268,7 @@ test_readiness_requires_a_worker() (
 )
 
 test_readiness_requires_a_worker
+test_logging_uses_stderr
 test_normal_exit_code
 test_main_stdin_is_preserved
 test_sigterm_is_forwarded
