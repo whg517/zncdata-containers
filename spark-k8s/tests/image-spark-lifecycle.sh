@@ -63,3 +63,35 @@ docker rm "$CID" >/dev/null; CID=""
 docker image rm "$HISTORY_IMAGE" >/dev/null
 HISTORY_IMAGE=""
 echo 'ok - real HistoryServer reads persisted event log, restarts and handles TERM/INT once'
+
+# PythonRunner's child must stop before post-hooks, not only its Java parent.
+CID=$(docker run -d -e SPARK_DRIVER_BIND_ADDRESS=127.0.0.1 "$TEST_IMAGE" driver \
+    --master 'local[2]' --driver-memory 512m \
+    --conf spark.driver.extraJavaOptions=-XX:ActiveProcessorCount=2 \
+    --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=file:///kubedoop/run/events \
+    /kubedoop/run/job.py --hold)
+count=0
+for signal in TERM INT; do
+    count=$((count + 1))
+    deadline=$((SECONDS + 90))
+    ready=false
+    while ((SECONDS < deadline)); do
+        logs=$(docker logs "$CID" 2>&1)
+        if [[ "$(grep -c '^TEST_SPARK_REAL_COMPUTE_AND_PERSISTENCE_OK$' <<< "$logs" || true)" == "$count" ]]; then
+            ready=true; break
+        fi
+        sleep 1
+    done
+    [[ "$ready" == true ]] || fail 'long-running real Python driver not ready'
+    docker kill --signal "$signal" "$CID" >/dev/null
+    timeout 40 docker wait "$CID" >/dev/null || fail 'Python driver group shutdown timeout'
+    status=$(docker inspect -f '{{.State.ExitCode}}' "$CID")
+    [[ "$status" == 0 || "$status" == 143 ]] || fail "Python driver status $status"
+    logs=$(docker logs "$CID" 2>&1)
+    [[ "$(grep -c '^TEST_SPARK_PRE_READY$' <<< "$logs")" == "$count" ]] || fail 'driver pre-hook count'
+    [[ "$(grep -c '^TEST_SPARK_POST_DONE$' <<< "$logs")" == "$count" ]] || fail 'post-hook ran while Java/Python child was alive'
+    ! grep -Eq 'Main process.*did not exit|post-script: .*failed|Spark Python driver still' <<< "$logs" || fail 'driver group escalated or hooks failed'
+    [[ "$signal" != TERM ]] || docker start "$CID" >/dev/null
+done
+docker rm "$CID" >/dev/null; CID=""
+echo 'ok - real long-running PySpark driver TERM/INT and restart drain Python children before post-hooks'

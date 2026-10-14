@@ -1,7 +1,9 @@
 import os
 import sys
+from pathlib import Path
 from pyspark.sql import SparkSession
 
+Path("/kubedoop/run/python-driver-pid").write_text(str(os.getpid()))
 spark = SparkSession.builder.appName("universal-process-regression").getOrCreate()
 spark.sparkContext.setLogLevel("WARN")
 path = "/kubedoop/run/result"

@@ -243,6 +243,38 @@ test_script_discovery_failure_is_propagated() {
     pass "script discovery failure aborts the pre-script run"
 }
 
+test_descendants_after_normal_exit() {
+    local mode="$1" directory="${TMP_DIR}/group-${1}" rc=0 started=$SECONDS
+    mkdir -p "$directory"
+    (
+        KUBEDOOP_KILL_TIMEOUT=1
+        run_lifecycle bash -c '
+            bash -c '\''
+                if [[ "$2" == ignore ]]; then
+                    trap "" TERM
+                else
+                    trap "echo TERM > \"$1/term\"; exit 42" TERM
+                fi
+                echo "$BASHPID" > "$1/child"
+                while :; do sleep 0.05; done
+            '\'' bash "$1" "$2" &
+            while [[ ! -s "$1/child" ]]; do sleep 0.05; done
+            exit 7
+        ' bash "$directory" "$mode"
+        _group_has_live_processes "$MAIN_PGID" && exit 99
+        exit "$EXIT_CODE"
+    ) 2>"$directory/log" || rc=$?
+    [[ "$rc" == 7 ]] || fail 'descendant cleanup lost main status or left a live process'
+    ((SECONDS - started <= 5)) || fail 'descendant shutdown was unbounded'
+    if [[ "$mode" == ignore ]]; then
+        grep -Fq 'Main process group did not exit' "$directory/log" || fail 'ignored descendant TERM not escalated'
+    else
+        [[ -f "$directory/term" ]] || fail 'descendant did not receive TERM after main normal exit'
+        ! grep -Fq 'sending SIGKILL' "$directory/log" || fail 'graceful descendant unnecessarily escalated'
+    fi
+    pass "${mode} descendant exits before post-hooks and retains normal main status 7"
+}
+
 test_logging_uses_stderr
 test_normal_exit_code
 test_main_stdin_is_preserved
@@ -252,5 +284,7 @@ test_signals_during_cleanup signal
 test_signals_during_cleanup normal
 test_sigkill_after_timeout
 test_exited_child_status_127
+test_descendants_after_normal_exit graceful
+test_descendants_after_normal_exit ignore
 test_root_owned_scripts_when_possible
 test_script_discovery_failure_is_propagated

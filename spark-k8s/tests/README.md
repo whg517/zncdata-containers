@@ -26,7 +26,8 @@ signal forwarding and status retention. It does not simulate a Kubernetes cluste
 
 The application suite runs real PySpark computation, writes and rereads Parquet
 data across a same-container restart, and feeds real event logs into HistoryServer.
-It checks HistoryServer HTTP results, restart, TERM/INT shutdown and exactly-once
+It checks HistoryServer HTTP results and a real long-running Python driver,
+restart, TERM/INT shutdown, child-process exit before post-hooks and exactly-once
 hooks. All files, containers and derived images are private disposable fixtures;
 no external cluster, database, host mount or published port is used.
 
@@ -37,6 +38,12 @@ environment including driver URL, executor identity, memory, cores and pod field
 Native Spark scripts are unchanged. Explicit daemon scripts retain native daemon
 behavior and should not be used as the supervised foreground command. The default
 command displays `spark-submit --help`; no workload or external state is created.
+
+The main command runs in its own foreground process group (util-linux `setsid`).
+Shutdown signals and the bounded kill deadline cover its Java/Python children;
+post-hooks run only after live group members stop. Hooks stay outside that group,
+so repeated shutdown signals do not interrupt their cleanup. Explicitly daemonized
+commands escaping the foreground group are not supported supervised workloads.
 
 Pre/post hooks follow the other universal images' root-owned executable contract
 under `/kubedoop/mount/{pre-script,post-script}`. Diagnostics go to stderr and do

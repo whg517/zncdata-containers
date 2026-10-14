@@ -35,6 +35,9 @@ See `versions.yaml` for current values. Structure:
 - `kubedoop/bin/entrypoint.sh`, `kubedoop/lib/{log,run,signal}.sh` — universal pre/post hooks, stderr diagnostics, stdin retention, bounded TERM/INT shutdown and exit propagation.
 - `kubedoop/bin/run-spark` — foreground master/worker/history, Kubernetes driver/executor and arbitrary command pass-through; no embedded second Tini or options echo.
 - ENTRYPOINT prefixes the runner after Tini/universal entrypoint; CMD is `spark-submit --help`, UID 1001 preserved.
+- Main commands use a separate `setsid` foreground process group. TERM/INT and
+  bounded escalation cover Java/Python children before post-hooks; hook cleanup
+  remains outside the workload group. Runtime includes util-linux-core.
 - Exact duplicate version entries are removed; the supported 3.5.5 configuration and dependency pins are unchanged.
 
 ## Dependencies

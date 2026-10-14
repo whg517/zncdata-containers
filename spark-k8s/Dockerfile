@@ -183,6 +183,7 @@ RUN <<EOF
     microdnf update
     microdnf install \
         procps \
+        util-linux-core \
         python${PYTHON_VERSION} \
         python${PYTHON_VERSION}-pip \
         java-${JAVA_VERSION}-openjdk-devel \
