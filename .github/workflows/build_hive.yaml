@@ -11,7 +11,7 @@ on:
     branches:
       - main
     tags:
-        - '\d+.\d+.\d+*'
+        - '[0-9]+.[0-9]+.[0-9]+*'
     paths:
       - hive/**
       - kubedoop-base/**
@@ -102,6 +102,16 @@ jobs:
           sign: ${{ github.ref_type == 'tag' }}
           action_debug: 'false' # enable debug for the build-and-push action if needed
 
+
+      - name: Run Hive lifecycle tests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/hive:${{ matrix.version }}-kubedoop${{ env.KUBEDOOP_VERSION }}-${{ matrix.arch }}
+        run: |
+          hive/tests/source-entrypoint-framework.sh
+          hive/tests/source-start-metastore.sh
+          hive/tests/image-entrypoint-framework.sh "$IMAGE"
+          bash hive/tests/image-schema-cancellation.sh "$IMAGE"
+          hive/tests/image-hive-lifecycle.sh "$IMAGE"
 
   build-manifest:
     name: Create manifest for ${{ matrix.version }}
