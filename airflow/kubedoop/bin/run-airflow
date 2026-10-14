@@ -39,7 +39,7 @@ done
 # Airflow's native CLI is the default. Other executable commands pass through
 # without database/user/pip initialization, like other universal images.
 case "$AIRFLOW_COMMAND" in
-    airflow|bash|python|-*|api-server|webserver|scheduler|dag-processor|triggerer|standalone|celery|db|users|roles|assets|datasets|backfill|cheat-sheet|config|connections|dags|info|jobs|kerberos|plugins|pools|providers|rotate-fernet-key|tasks|variables|version) ;;
+    airflow|bash|python|-*|api-server|webserver|scheduler|dag-processor|triggerer|standalone|celery|db|users|roles|assets|datasets|backfill|cheat-sheet|config|connections|dags|info|jobs|kerberos|plugins|pools|providers|rotate-fernet-key|sync-perm|tasks|variables|version) ;;
     *) exec "$@" ;;
 esac
 

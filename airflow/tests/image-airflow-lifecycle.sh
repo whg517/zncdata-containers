@@ -17,6 +17,9 @@ case "$version" in
     3.*) executor=LocalExecutor; frontend=api-server ;;
     *) fail "unexpected Airflow version $version" ;;
 esac
+if [[ "$version" == 2.* ]]; then
+    docker run --rm -e CONNECTION_CHECK_MAX_COUNT=0 "$IMAGE" sync-perm --help >/dev/null || fail 'native sync-perm short command failed'
+fi
 for role in "$frontend" scheduler triggerer dag-processor; do
     docker run --rm -e CONNECTION_CHECK_MAX_COUNT=0 "$IMAGE" airflow "$role" --help >/dev/null || fail "native $role help failed"
 done

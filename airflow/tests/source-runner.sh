@@ -33,8 +33,14 @@ EOF
 chmod +x "$TMP_DIR/bin/id"
 export PATH="$TMP_DIR/bin:$PATH" CAPTURE="$TMP_DIR/args" PID_CAPTURE="$TMP_DIR/pid"
 export CONNECTION_CHECK_MAX_COUNT=0
-for command in scheduler webserver api-server dag-processor triggerer 'celery'; do
+for command in scheduler webserver api-server dag-processor triggerer celery sync-perm; do
     TEST_EXIT=7 bash "$RUNNER" airflow "$command" 'a b=secret' >"$TMP_DIR/out" 2>"$TMP_DIR/err" & pid=$!
+    rc=0; wait "$pid" || rc=$?
+    [[ "$rc" == 7 && "$(cat "$PID_CAPTURE")" == "$pid" ]]
+    mapfile -d '' -t args < "$CAPTURE"
+    [[ "${args[0]}" == "$command" && "${args[1]}" == 'a b=secret' ]]
+    if grep -Fq secret "$TMP_DIR/out" "$TMP_DIR/err"; then exit 1; fi
+    TEST_EXIT=7 bash "$RUNNER" "$command" 'a b=secret' >"$TMP_DIR/out" 2>"$TMP_DIR/err" & pid=$!
     rc=0; wait "$pid" || rc=$?
     [[ "$rc" == 7 && "$(cat "$PID_CAPTURE")" == "$pid" ]]
     mapfile -d '' -t args < "$CAPTURE"
