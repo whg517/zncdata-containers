@@ -31,6 +31,7 @@ See `versions.yaml` for current values. Structure:
 - `tests/source-entrypoint-framework.sh` — source lifecycle regressions
 - `tests/image-entrypoint-framework.sh` — image wiring, hooks, signals, stdin and exit-code regressions
 - `tests/image-trino-lifecycle.sh` — real single-node SQL, graceful stop and restart acceptance
+- Framework commands own a separate session/group drained before post-hooks; timeout cancellation/reaping precedes ALRM handler removal. All versions require root/UID1001 SQL/TPCH across three same-container starts, TERM/INT/stop, stable identity and exactly-once ordered hooks.
 
 ## Dependencies
 - Uses at build time: java-devel

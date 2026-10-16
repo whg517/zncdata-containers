@@ -177,7 +177,8 @@ RUN <<EOF
     set -e
     microdnf update
     microdnf install \
-        python
+        python \
+        util-linux-core
 
     microdnf clean all
 EOF

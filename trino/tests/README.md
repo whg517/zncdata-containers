@@ -44,3 +44,16 @@ after their deadlines.
 
 CI runs both image suites on all supported versions (451, 470, 476), on native
 amd64 and arm64 runners. Local results must state the actual platform tested.
+
+Follow-up regressions require installed-source hashes, root stdin/stdout, genuine
+exit142, graceful/TERM-ignoring descendants after normal main exit, and safe
+TERM-resistant timer cancellation/reaping before removing the ALRM handler.
+The application owns a separate process group; post-hooks must not observe live
+group members. The worker-readiness mock and inner CLI deadline checks remain.
+
+Run `sudo bash trino/tests/source-entrypoint-framework.sh` for root hook coverage.
+All three real application suites run as kubedoop and root, with three starts
+of the same container per identity, TERM/INT/Docker stop, constant and TPCH SQL,
+unchanged node identity and exact PRE/POST ordering after JVM exit. Cleanup uses
+only test-created containers/anonymous volumes, a unique fixture image tag and
+its own temporary directory. No existing user data, clusters or host ports.

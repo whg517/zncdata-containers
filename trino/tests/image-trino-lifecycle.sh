@@ -6,16 +6,20 @@ IMAGE="${1:?Usage: image-trino-lifecycle.sh IMAGE}"
 TMP_DIR=$(mktemp -d)
 TEST_IMAGE="trino-lifecycle-test:$(date +%s)-$$"
 CID=""
+CONTAINER_IDS=()
 
 cleanup() {
-    if [[ -n "$CID" ]]; then docker rm -f "$CID" >/dev/null 2>&1 || true; fi
+    for cid in "${CONTAINER_IDS[@]}"; do docker rm -fv "$cid" >/dev/null 2>&1 || true; done
     docker image rm "$TEST_IMAGE" >/dev/null 2>&1 || true
     rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
 fail() {
-    if [[ -n "$CID" ]]; then docker logs "$CID" --tail 100 >&2 || true; fi
+    if [[ -n "$CID" ]]; then
+        docker inspect -f 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$CID" >&2 || true
+        docker logs "$CID" --tail 100 >&2 || true
+    fi
     echo "not ok - $*" >&2
     exit 1
 }
@@ -62,18 +66,27 @@ test_cli_deadlines() {
 
 stop_and_check() {
     local expected_runs="$1" output rc
-    docker stop -t 40 "$CID" >/dev/null || fail "docker stop failed"
-    rc=$(docker inspect -f '{{.State.ExitCode}}' "$CID")
+    case "$expected_runs" in
+        1) docker kill --signal TERM "$CID" >/dev/null || fail 'TERM failed' ;;
+        2) docker kill --signal INT "$CID" >/dev/null || fail 'INT failed' ;;
+        3) docker stop -t 40 "$CID" >/dev/null || fail 'docker stop failed' ;;
+    esac
+    rc=$(timeout 45 docker wait "$CID") || fail 'Trino shutdown was unbounded'
     # The real Trino JVM may exit cleanly or report its SIGTERM status.
     [[ "$rc" == 0 || "$rc" == 143 ]] || fail "unexpected shutdown status $rc"
     output=$(docker logs "$CID" 2>&1)
     [[ "$(grep -c '^TEST_TRINO_PRE_READY$' <<< "$output")" == "$expected_runs" ]] || fail "pre-hooks did not run once per start"
     [[ "$(grep -c '^TEST_TRINO_POST_DONE$' <<< "$output")" == "$expected_runs" ]] || fail "post-hooks did not finish once per shutdown"
-    if grep -Eq 'Main process did not exit|post-script: .*failed|Trino JVM is still running' <<< "$output"; then
+    if grep -Eq 'sending SIGKILL|post-script: .*failed|Trino JVM is still running' <<< "$output"; then
         fail "Trino shutdown required escalation or post-hooks failed"
     fi
+    local events expected="" i
+    events=$(docker cp "$CID:/kubedoop/run/trino-events" - | tar -xO | tr '\n' ',')
+    for ((i=0;i<expected_runs;i++)); do expected+=PRE,POST,; done
+    [[ "$events" == "$expected" ]] || fail "hook order/count changed: $events"
 }
 
+docker image inspect "$IMAGE" >/dev/null || fail 'source-built image missing locally'
 cp -R "${SCRIPT_DIR}/fixtures/etc" "$TMP_DIR/etc"
 cp "${SCRIPT_DIR}/fixtures/10-prepare.sh" "$TMP_DIR/10-pre.sh"
 cp "${SCRIPT_DIR}/fixtures/10-check-stopped.sh" "$TMP_DIR/10-post.sh"
@@ -87,16 +100,23 @@ USER kubedoop
 EOF
 docker build -q -t "$TEST_IMAGE" "$TMP_DIR" >/dev/null || fail "failed to build Trino test image"
 # No command override: exercise the production default launcher run CMD.
-CID=$(docker run -d "$TEST_IMAGE") || fail "failed to start Trino"
-wait_for_server
-test_cli_deadlines
-check_sql
-identity_before=$(docker exec "$CID" sha256sum /kubedoop/trino-server/etc/node.properties)
-stop_and_check 1
-docker start "$CID" >/dev/null || fail "failed to restart Trino"
-wait_for_server
-check_sql
-identity_after=$(docker exec "$CID" sha256sum /kubedoop/trino-server/etc/node.properties)
-[[ "$identity_after" == "$identity_before" ]] || fail "restart changed the configured node identity"
-stop_and_check 2
-echo 'ok - Trino default CMD serves SQL, stops gracefully, and restarts with unchanged node configuration'
+for identity in kubedoop root; do
+    options=()
+    [[ "$identity" != root ]] || options=(--user root)
+    CID=$(docker run -d "${options[@]}" "$TEST_IMAGE") || fail 'failed to start Trino'
+    CONTAINER_IDS+=("$CID")
+    for cycle in 1 2 3; do
+        wait_for_server
+        [[ $(docker exec "$CID" cat /proc/1/comm) == tini ]] || fail 'Tini PID1 changed'
+        if [[ "$cycle" == 1 ]]; then
+            test_cli_deadlines
+            identity_before=$(docker exec "$CID" sha256sum /kubedoop/trino-server/etc/node.properties)
+        fi
+        check_sql
+        identity_after=$(docker exec "$CID" sha256sum /kubedoop/trino-server/etc/node.properties)
+        [[ "$identity_after" == "$identity_before" ]] || fail 'restart changed configured node identity'
+        stop_and_check "$cycle"
+        if [[ "$cycle" -lt 3 ]]; then docker start "$CID" >/dev/null || fail 'failed to restart Trino'; fi
+    done
+    echo "ok - $identity Trino default CMD SQL/TPCH, three same-CID starts, TERM/INT/stop, unchanged identity and exact hooks"
+done
