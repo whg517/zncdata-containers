@@ -97,7 +97,8 @@ jobs:
       - name: Run Kerberos lifecycle and systemd regressions
         shell: bash
         run: |
-          image="${{ env.REGISTRY }}/krb5:${{ matrix.version }}-kubedoop${{ env.KUBEDOOP_VERSION }}"
+          # Run build uses --arch-suffix even when a PR only loads the image locally.
+          image="${{ env.REGISTRY }}/krb5:${{ matrix.version }}-kubedoop${{ env.KUBEDOOP_VERSION }}-${{ matrix.arch }}"
           sudo bash krb5/tests/source-entrypoint-framework.sh
           bash krb5/tests/image-entrypoint-framework.sh "$image"
           bash krb5/tests/image-kerberos.sh "$image"
