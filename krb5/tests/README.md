@@ -16,8 +16,13 @@ normal exit, KILL deadlines, hook ordering/discovery failure and stdin/stdout.
 The image harness hashes installed sources, follows projected hook symlinks,
 checks failure policies, TERM/INT/RTMIN+3, orphan reaping and argv confidentiality.
 The real KDC suite verifies `kinit`/`klist`, authenticated `kadmin` RPC,
-database persistence over three same-container starts, default systemd PID 1,
+and deterministically checks that post-hook assertions reject live daemons but
+allow terminated zombies awaiting reaping (both daemon names).
+It checks database persistence over nine same-container starts (three complete
+TERM/INT/native-stop sequences in foreground mode), default systemd PID 1,
 optional foreground Tini and post-hooks after both real daemons have stopped.
+Failures retain container logs/state and process names/states without command
+arguments; both native CI legs finish independently to preserve diagnostics.
 
 The systemd test uses an isolated privileged container with a private cgroup
 namespace, never a host cgroup mount or host daemon configuration change.

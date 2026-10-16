@@ -37,7 +37,7 @@ Run source-entrypoint-framework.sh as user and root, then image-entrypoint-frame
 and image-kerberos.sh against that exact image. The latter needs a Docker daemon
 capable of a privileged **private-cgroup** systemd test container; do not alter
 host daemon configuration or mount the host cgroup hierarchy. It checks native
-ticket issuance, administrative RPC, persisted principals across three same-CID
+ticket issuance, administrative RPC, persisted principals across nine same-CID
 starts/stops and pre/post ordering in default systemd and foreground modes.
 No test publishes images or exposes host ports. Only test-owned containers,
 anonymous volumes and derived fixture tags are removed.
