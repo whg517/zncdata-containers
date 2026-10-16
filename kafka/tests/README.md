@@ -53,3 +53,18 @@ that post-hooks run once per shutdown after the broker JVM exits. No host ports,
 existing volumes, or running Kafka clusters are used.
 
 CI runs both image suites for every supported version on amd64 and arm64.
+
+Follow-up acceptance also covers clean command stdout/stdin as kubedoop and root,
+root-owned sticky HOME with writable user caches and non-replaceable framework
+directories, installed-source hashes, owned-group descendant draining after
+normal main exit, and deterministic TERM-resistant timer cancellation while
+preserving genuine application status142. Framework diagnostics use stderr;
+hook output remains under the hook author's control.
+
+Run `sudo bash kafka/tests/source-entrypoint-framework.sh` for projected root
+hook discovery coverage. The real KRaft suite now repeats three same-container
+starts as each identity (kubedoop/root), retains messages and cluster identity,
+tests TERM/INT/Docker stop, and checks exact PRE/POST ordering after JVM exit.
+Its existing in-container CLI deadline regressions remain required. No host
+ports, existing clusters or user data are used; cleanup targets only its own
+containers, anonymous volumes, temporary directory and unique fixture tag.

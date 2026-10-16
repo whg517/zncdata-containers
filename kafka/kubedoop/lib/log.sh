@@ -25,11 +25,11 @@ _kubedoop_log() {
     printf "[%s] [%s] [%s] %s\n" "$timestamp" "$__KUBEDOOP_LOG_PREFIX" "$level" "$msg"
 }
 
-# Log at INFO level to stdout.
+# Log at INFO level to stderr, preserving the main command's stdout.
 #
 # Arguments:
 #   $@ - Message strings
-log_info()  { _kubedoop_log "INFO"  "$@"; }
+log_info()  { _kubedoop_log "INFO"  "$@" >&2; }
 
 # Log at WARN level to stderr.
 #
@@ -43,7 +43,7 @@ log_warn()  { _kubedoop_log "WARN"  "$@" >&2; }
 #   $@ - Message strings
 log_error() { _kubedoop_log "ERROR" "$@" >&2; }
 
-# Log at DEBUG level to stdout. No-op unless KUBEDOOP_DEBUG=true.
+# Log at DEBUG level to stderr. No-op unless KUBEDOOP_DEBUG=true.
 #
 # Arguments:
 #   $@ - Message strings
@@ -52,6 +52,6 @@ log_error() { _kubedoop_log "ERROR" "$@" >&2; }
 #   0 - Always (no error when debug is disabled)
 log_debug() {
     if [[ "${KUBEDOOP_DEBUG:-false}" == "true" ]]; then
-        _kubedoop_log "DEBUG" "$@"
+        _kubedoop_log "DEBUG" "$@" >&2
     fi
 }

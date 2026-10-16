@@ -87,10 +87,16 @@ WORKDIR /kubedoop
 
 COPY --from=kafka-builder --chown=kubedoop:kubedoop /kubedoop/ /kubedoop/
 
+# Commands own a session/group, separate from the entrypoint and post-hooks.
+RUN microdnf install -y util-linux-core && microdnf clean all
+
 COPY --from=tini-downloader /tmp/tini /usr/bin/tini
 COPY --chown=root:root kubedoop/lib/ /kubedoop/lib/
 COPY --chown=root:root kubedoop/bin/entrypoint.sh /kubedoop/bin/entrypoint.sh
-RUN chmod -R 0755 /kubedoop/lib/ /kubedoop/bin/ \
+RUN chown root:kubedoop /kubedoop \
+    && chmod 1770 /kubedoop \
+    && chown -R root:root /kubedoop/lib/ /kubedoop/bin/ \
+    && chmod -R 0755 /kubedoop/lib/ /kubedoop/bin/ \
     && mkdir -p /kubedoop/mount/pre-script /kubedoop/mount/post-script \
     && chown -R root:root /kubedoop/mount/ \
     && mkdir -p /kubedoop/run \

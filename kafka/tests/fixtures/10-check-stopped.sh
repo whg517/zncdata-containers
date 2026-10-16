@@ -9,3 +9,4 @@ for path in /proc/[0-9]*/cmdline; do
     fi
 done
 echo TEST_KAFKA_POST_DONE
+printf 'POST\n' >> /kubedoop/run/kafka-events

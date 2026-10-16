@@ -35,6 +35,8 @@ None -- only product that builds purely from upstream source without any kubedoo
 - `tests/source-entrypoint-framework.sh` -- source-level lifecycle regressions, independent of other product directories
 - `tests/image-entrypoint-framework.sh` -- image regressions for hooks, signals, stdin, exit status, and log redaction
 - `tests/image-kafka-lifecycle.sh` -- disposable KRaft broker produce/consume, graceful stop, and restart acceptance
+- Framework diagnostics use stderr without contaminating command streams. Root-owned sticky HOME permits caches but protects bin/lib/mount; the application owns a session/group drained before post-hooks, with safe timer cancellation/reaping before ALRM handler removal.
+- All four versions require real KRaft identity/message persistence over three same-container starts as kubedoop and root, TERM/INT/Docker stop and exactly-once PRE/POST; no production storage formatting or default-command changes.
 
 ## Extras
 - Widest Java version range of any product (21-23). Kafka 4.0.0 uses Java 23.
