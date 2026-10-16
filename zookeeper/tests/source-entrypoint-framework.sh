@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lightweight source-level behavioral tests for the zookeeper-vendored entrypoint framework.
+# Lightweight source-level behavioral tests for the product-vendored entrypoint framework.
 #
 # These tests source the framework libraries directly from the working tree so
 # they can validate lifecycle logic without requiring a full container image
@@ -52,7 +52,7 @@ mkdir -p "${KUBEDOOP_MOUNT_DIR}/pre-script" "${KUBEDOOP_MOUNT_DIR}/post-script"
 
 test_normal_exit_code() {
     local expected
-    for expected in 7 127 130 142 143; do
+    for expected in 7 127 130 142 143 165; do
         run_lifecycle bash -c 'exit "$1"' bash "$expected"
         [[ "$EXIT_CODE" -eq "$expected" ]] || fail "expected normal exit code ${expected}, got ${EXIT_CODE}"
     done
@@ -62,8 +62,20 @@ test_normal_exit_code() {
 test_main_stdin_is_preserved() {
     local output
     output=$(run_lifecycle cat <<< 'TEST_MAIN_STDIN')
-    grep -qx TEST_MAIN_STDIN <<< "$output" || fail "main process did not receive stdin"
-    pass "background main process preserves stdin"
+    [[ "$output" == TEST_MAIN_STDIN ]] || fail "main stdin/stdout was changed by the framework"
+    pass "background main process preserves stdin and clean stdout"
+}
+
+test_logging_uses_stderr() {
+    local output stderr_file="${TMP_DIR}/framework-stderr"
+    output=$({
+        log_info TEST_INFO_DIAGNOSTIC
+        KUBEDOOP_DEBUG=true log_debug TEST_DEBUG_DIAGNOSTIC
+    } 2>"$stderr_file")
+    [[ -z "$output" ]] || fail "framework diagnostics polluted stdout"
+    grep -Fq '[INFO] TEST_INFO_DIAGNOSTIC' "$stderr_file" || fail "INFO diagnostic missing from stderr"
+    grep -Fq '[DEBUG] TEST_DEBUG_DIAGNOSTIC' "$stderr_file" || fail "DEBUG diagnostic missing from stderr"
+    pass "INFO and DEBUG diagnostics use stderr"
 }
 
 test_signals_during_cleanup() {
@@ -187,6 +199,37 @@ test_exited_child_status_127() {
     pass "status 127 is preserved when the child has already exited"
 }
 
+test_term_resistant_shutdown_timer_is_cancelled() {
+    local markers="${TMP_DIR}/timer-cancel" rc=0 started=$SECONDS
+    mkdir -p "$markers"
+    (
+        KUBEDOOP_KILL_TIMEOUT=2
+        # Model cancellation racing with a timer shell that cannot act on TERM.
+        # The main child waits until this condition exists before it exits.
+        sleep() {
+            trap '' TERM
+            touch "$markers/timer-ready"
+            command sleep "$@"
+        }
+        run_post_scripts() { echo POST > "$markers/post"; }
+        run_lifecycle bash -c '
+            trap '\''while [[ ! -e "$1/timer-ready" ]]; do sleep 0.01; done; exit 42'\'' TERM
+            touch "$1/ready"
+            while :; do sleep 0.05; done
+        ' bash "$markers"
+        exit "$EXIT_CODE"
+    ) &
+    local lifecycle_pid=$!
+    wait_for_file "$markers/ready" || fail 'timer cancellation child readiness'
+    started=$SECONDS
+    kill -TERM "$lifecycle_pid"
+    wait "$lifecycle_pid" || rc=$?
+    [[ $rc == 42 ]] || fail "shutdown timer cancellation changed main status42 to $rc"
+    [[ $(cat "$markers/post" 2>/dev/null) == POST ]] || fail 'shutdown timer prevented post-hook'
+    ((SECONDS - started < 2)) || fail 'cancelled shutdown timer delayed graceful exit'
+    pass 'TERM-resistant shutdown timer is cancelled before restoring SIGALRM'
+}
+
 test_root_owned_scripts_when_possible() {
     if [[ "$(id -u)" -ne 0 ]]; then
         echo "skip - root-owned script execution requires running this test as root"
@@ -231,13 +274,58 @@ test_script_discovery_failure_is_propagated() {
     pass "script discovery failure aborts the pre-script run"
 }
 
+test_descendants_after_normal_exit() {
+    local mode="$1" directory="${TMP_DIR}/group-${1}" rc=0 started=$SECONDS
+    mkdir -p "$directory"
+    (
+        KUBEDOOP_KILL_TIMEOUT=1
+        run_lifecycle bash -c '
+            bash -c '\''
+                if [[ "$2" == ignore ]]; then
+                    trap "" TERM
+                else
+                    trap "echo TERM > \"$1/term\"; exit 42" TERM
+                fi
+                echo "$BASHPID" > "$1/child"
+                while :; do sleep 0.05; done
+            '\'' bash "$1" "$2" &
+            while [[ ! -s "$1/child" ]]; do sleep 0.05; done
+            exit 7
+        ' bash "$directory" "$mode"
+        _group_has_live_processes "$MAIN_PGID" && exit 99
+        exit "$EXIT_CODE"
+    ) 2>"$directory/log" || rc=$?
+    [[ "$rc" == 7 ]] || fail 'descendant cleanup lost main status or left a live process'
+    ((SECONDS - started <= 5)) || fail 'descendant shutdown was unbounded'
+    if [[ "$mode" == ignore ]]; then
+        grep -Fq 'Main process group did not exit' "$directory/log" || fail 'ignored descendant TERM not escalated'
+    else
+        [[ -f "$directory/term" ]] || fail 'descendant did not receive TERM after main normal exit'
+        ! grep -Fq 'sending SIGKILL' "$directory/log" || fail 'graceful descendant unnecessarily escalated'
+    fi
+    pass "${mode} descendant exits before post-hooks and retains normal main status 7"
+}
+
+# The source behavior harness loads libraries directly, so also assert the
+# installed launcher path before exercising those libraries. This catches a
+# packaging typo even before a full downstream source build is available.
+grep -Fq 'COPY --chown=root:root kubedoop/lib/ /kubedoop/lib/' "${PRODUCT_DIR}/Dockerfile" || fail 'Dockerfile library installation path changed'
+grep -Fq 'for lib in "${KUBEDOOP_HOME}/lib/"*.sh; do' "${PRODUCT_DIR}/kubedoop/bin/entrypoint.sh" || fail 'entrypoint does not load the installed library directory'
+grep -Fq 'ENTRYPOINT ["tini", "--", "/kubedoop/bin/entrypoint.sh"]' "${PRODUCT_DIR}/Dockerfile" || fail 'Dockerfile launcher path changed'
+pass 'installed entrypoint and library paths agree with the Dockerfile'
+
+test_logging_uses_stderr
 test_normal_exit_code
 test_main_stdin_is_preserved
 test_sigterm_is_forwarded
 test_sigterm_is_forwarded 127
+test_sigterm_is_forwarded 142
 test_signals_during_cleanup signal
 test_signals_during_cleanup normal
 test_sigkill_after_timeout
 test_exited_child_status_127
+test_term_resistant_shutdown_timer_is_cancelled
+test_descendants_after_normal_exit graceful
+test_descendants_after_normal_exit ignore
 test_root_owned_scripts_when_possible
 test_script_discovery_failure_is_propagated

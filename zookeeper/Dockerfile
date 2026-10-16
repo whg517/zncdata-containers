@@ -112,6 +112,9 @@ WORKDIR /kubedoop
 
 COPY --from=zookeeper-builder --chown=kubedoop:kubedoop /kubedoop/ /kubedoop/
 
+# setsid keeps application descendants out of the entrypoint/post-hook group.
+RUN microdnf install -y util-linux-core && microdnf clean all
+
 # Init system, downloaded and checksum-verified in the tini-downloader stage
 COPY --from=tini-downloader /tmp/tini /usr/bin/tini
 
@@ -119,7 +122,10 @@ COPY --from=tini-downloader /tmp/tini /usr/bin/tini
 # Framework files: root-owned, world-readable/executable, NOT writable by kubedoop
 COPY --chown=root:root kubedoop/lib/ /kubedoop/lib/
 COPY --chown=root:root kubedoop/bin/entrypoint.sh /kubedoop/bin/entrypoint.sh
-RUN chmod -R 0755 /kubedoop/lib/ /kubedoop/bin/ \
+RUN chown root:kubedoop /kubedoop \
+    && chmod 1770 /kubedoop \
+    && chown -R root:root /kubedoop/lib/ /kubedoop/bin/ \
+    && chmod -R 0755 /kubedoop/lib/ /kubedoop/bin/ \
     && mkdir -p /kubedoop/mount/pre-script /kubedoop/mount/post-script \
     && chown -R root:root /kubedoop/mount/ \
     && mkdir -p /kubedoop/run \

@@ -31,6 +31,8 @@ See `versions.yaml` for current values. Structure:
 - `kubedoop/lib/` — entrypoint framework libraries for logging, operator script discovery/execution, and signal handling
 - `tests/source-entrypoint-framework.sh` — source-level shell tests for the vendored entrypoint framework
 - `tests/image-entrypoint-framework.sh` — image-level tests for built entrypoint behavior
+- `tests/image-zookeeper.sh` — real default-CMD znode persistence and pre/post ordering over three same-container starts/stops as kubedoop and root
+- Framework diagnostics use stderr; root-owned sticky HOME remains writable for user caches but protects root-owned bin/lib/mount. Commands own a separate session/group, drained before post-hooks, with timer cancellation/reaping before removing SIGALRM handling.
 
 ## Dependencies
 - Uses at build time: java-devel (Java 11)
@@ -43,6 +45,7 @@ See `versions.yaml` for current values. Structure:
 - `kubedoop/lib/` — vendored framework libraries for the product-first rollout
 - `tests/source-entrypoint-framework.sh` — local source-level verification for framework lifecycle behavior
 - `tests/image-entrypoint-framework.sh` — post-build image verification for entrypoint wiring, hooks, and signal behavior
+- `tests/fixtures/` — derived-image projected lifecycle hooks, never a prebuilt product substitute
 - `kubedoop/patches/3.9.2/` — version-specific patches
 - `kubedoop/patches/apply_patches.sh` — patch application script
 - `kubedoop/jmx/config/config.yaml` — ZooKeeper JMX rules
