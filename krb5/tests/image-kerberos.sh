@@ -10,7 +10,16 @@ cleanup() {
     docker image rm "$fixture" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
-fail() { echo "not ok - $*" >&2; exit 1; }
+fail() {
+    echo "not ok - $*" >&2
+    for cid in "${containers[@]}"; do
+        docker inspect -f 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$cid" >&2 || true
+        docker logs "$cid" >&2 2>&1 || true
+        # Process names/states only: never dump setup arguments containing passwords.
+        docker exec "$cid" ps -eo pid,ppid,pgid,stat,comm >&2 2>&1 || true
+    done
+    exit 1
+}
 docker build --pull=false --build-arg BASE_IMAGE="$image" -t "$fixture" "$directory/fixtures"
 ready() {
     local cid=$1
@@ -49,6 +58,7 @@ for mode in foreground systemd; do
     for cycle in 1 2 3; do
         printf '%s\n' persistent-user-password | docker exec -i "$cid" kinit persistent@LIFECYCLE.TEST >/dev/null
         docker exec "$cid" klist -s
+        stop_started=$SECONDS
         if [[ $cycle == 1 && $mode == foreground ]]; then
             docker kill --signal TERM "$cid" >/dev/null
         elif [[ $cycle == 2 && $mode == foreground ]]; then
@@ -61,7 +71,7 @@ for mode in foreground systemd; do
         events=$(docker cp "$cid:/kubedoop/run/events" - | tar -xO | tr '\n' ',')
         expected=""
         for ((j=0;j<cycle;j++)); do expected+=PRE,POST,; done
-        [[ $events == "$expected" ]] || fail "$mode hook order/count $events"
+        [[ $events == "$expected" ]] || fail "$mode cycle=$cycle status=$status stop_seconds=$((SECONDS - stop_started)) hook order/count $events"
         if [[ $cycle -lt 3 ]]; then
             docker start "$cid" >/dev/null
             ready "$cid" || fail "$mode restart"

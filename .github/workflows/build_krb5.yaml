@@ -51,6 +51,8 @@ jobs:
     needs:
       - product-shard
     strategy:
+      # Keep native shutdown evidence from both architectures on a test failure.
+      fail-fast: false
       matrix:
         version: ${{fromJson(needs.product-shard.outputs.versions)}}
         arch: [amd64, arm64]
