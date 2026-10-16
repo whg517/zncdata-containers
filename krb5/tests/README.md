@@ -12,7 +12,8 @@ bash krb5/tests/image-kerberos.sh IMAGE
 
 The source harness covers exact packaging paths, valid statuses including
 127/142/165, interrupted waits, repeated shutdown signals, descendants after
-normal exit, KILL deadlines, hook ordering/discovery failure and stdin/stdout.
+normal exit, KILL deadlines, TERM-resistant timer cancellation before SIGALRM
+handler removal, hook ordering/discovery failure and stdin/stdout.
 The image harness hashes installed sources, follows projected hook symlinks,
 checks failure policies, TERM/INT/RTMIN+3, orphan reaping and argv confidentiality.
 The real KDC suite verifies `kinit`/`klist`, authenticated `kadmin` RPC,

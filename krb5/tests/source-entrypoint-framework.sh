@@ -199,6 +199,37 @@ test_exited_child_status_127() {
     pass "status 127 is preserved when the child has already exited"
 }
 
+test_term_resistant_shutdown_timer_is_cancelled() {
+    local markers="${TMP_DIR}/timer-cancel" rc=0 started=$SECONDS
+    mkdir -p "$markers"
+    (
+        KUBEDOOP_KILL_TIMEOUT=2
+        # Model cancellation racing with a timer shell that cannot act on TERM.
+        # The main child waits until this condition exists before it exits.
+        sleep() {
+            trap '' TERM
+            touch "$markers/timer-ready"
+            command sleep "$@"
+        }
+        run_post_scripts() { echo POST > "$markers/post"; }
+        run_lifecycle bash -c '
+            trap '\''while [[ ! -e "$1/timer-ready" ]]; do sleep 0.01; done; exit 42'\'' TERM
+            touch "$1/ready"
+            while :; do sleep 0.05; done
+        ' bash "$markers"
+        exit "$EXIT_CODE"
+    ) &
+    local lifecycle_pid=$!
+    wait_for_file "$markers/ready" || fail 'timer cancellation child readiness'
+    started=$SECONDS
+    kill -TERM "$lifecycle_pid"
+    wait "$lifecycle_pid" || rc=$?
+    [[ $rc == 42 ]] || fail "shutdown timer cancellation changed main status42 to $rc"
+    [[ $(cat "$markers/post" 2>/dev/null) == POST ]] || fail 'shutdown timer prevented post-hook'
+    ((SECONDS - started < 2)) || fail 'cancelled shutdown timer delayed graceful exit'
+    pass 'TERM-resistant shutdown timer is cancelled before restoring SIGALRM'
+}
+
 test_root_owned_scripts_when_possible() {
     if [[ "$(id -u)" -ne 0 ]]; then
         echo "skip - root-owned script execution requires running this test as root"
@@ -288,10 +319,12 @@ test_normal_exit_code
 test_main_stdin_is_preserved
 test_sigterm_is_forwarded
 test_sigterm_is_forwarded 127
+test_sigterm_is_forwarded 142
 test_signals_during_cleanup signal
 test_signals_during_cleanup normal
 test_sigkill_after_timeout
 test_exited_child_status_127
+test_term_resistant_shutdown_timer_is_cancelled
 test_descendants_after_normal_exit graceful
 test_descendants_after_normal_exit ignore
 test_root_owned_scripts_when_possible

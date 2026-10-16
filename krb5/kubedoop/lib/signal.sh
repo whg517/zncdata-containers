@@ -111,13 +111,13 @@ stop_process() {
     # even after graceful shutdown has completed.
     local timed_out=0
     local shell_pid="$BASHPID"
+    # Install before arming the timer, and keep installed until it is reaped.
+    trap 'timed_out=1; log_warn "Main process did not exit in ${timeout}s, sending SIGKILL"; _signal_process "$pid" KILL "$group"' SIGALRM
     (
         sleep "$timeout"
         kill -ALRM "$shell_pid" 2>/dev/null
     ) &
     local timer_pid=$!
-
-    trap 'timed_out=1; log_warn "Main process did not exit in ${timeout}s, sending SIGKILL"; _signal_process "$pid" KILL "$group"' SIGALRM
 
     local rc=0
     while :; do
@@ -135,9 +135,23 @@ stop_process() {
         break
     done
 
+    # This is our timer shell, not the application: cancellation must not depend
+    # on TERM delivery/traps. Otherwise it can sleep to the deadline and send an
+    # unhandled ALRM after the main child has already exited gracefully.
+    kill -KILL "$timer_pid" 2>/dev/null || true
+    local timer_rc=0
+    while :; do
+        timed_out=0
+        _CLEANUP_INTERRUPTED=0
+        wait "$timer_pid" 2>/dev/null
+        timer_rc=$?
+        if [[ "$timed_out" -eq 1 && "$timer_rc" -eq $((128 + 14)) ]] ||
+            [[ "$_CLEANUP_INTERRUPTED" -eq 1 && ( "$timer_rc" -eq 130 || "$timer_rc" -eq 143 || "$timer_rc" -eq $((128 + $(kill -l RTMIN+3))) ) ]]; then
+            continue
+        fi
+        break
+    done
     trap - SIGALRM
-    kill "$timer_pid" 2>/dev/null || true
-    wait "$timer_pid" 2>/dev/null || true
 
     STOP_EXIT_CODE=$rc
     STOP_REAPED=1
