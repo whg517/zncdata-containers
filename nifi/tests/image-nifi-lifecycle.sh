@@ -5,15 +5,17 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 IMAGE="${1:?Usage: image-nifi-lifecycle.sh IMAGE}"
 TEST_IMAGE="nifi-lifecycle-test:$(date +%s)-$$"
 CID=""
+CONTAINER_IDS=()
 
 cleanup() {
-    if [[ -n "$CID" ]]; then docker rm -f "$CID" >/dev/null 2>&1 || true; fi
+    for cid in "${CONTAINER_IDS[@]}"; do docker rm -fv "$cid" >/dev/null 2>&1 || true; done
     docker image rm "$TEST_IMAGE" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 fail() {
     if [[ -n "$CID" ]]; then
+        docker inspect -f 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$CID" >&2 || true
         docker logs "$CID" --tail 100 >&2 || true
         docker cp "$CID:/kubedoop/nifi/logs/nifi-app.log" - 2>/dev/null | tar -xO 2>/dev/null | tail -100 >&2 || true
     fi
@@ -48,7 +50,7 @@ check_foreground_jvm() {
 
 stop_and_check() {
     local expected_runs="$1" signal="${2:-TERM}" output rc
-    if [[ "$signal" == TERM ]]; then
+    if [[ "$signal" == stop ]]; then
         docker stop -t 50 "$CID" >/dev/null || fail "docker stop failed"
     else
         docker kill --signal "$signal" "$CID" >/dev/null || fail "shutdown signal failed"
@@ -59,9 +61,30 @@ stop_and_check() {
     output=$(docker logs "$CID" 2>&1)
     [[ "$(grep -c '^TEST_NIFI_PRE_READY$' <<< "$output")" == "$expected_runs" ]] || fail "pre-hooks did not run once per start"
     [[ "$(grep -c '^TEST_NIFI_POST_DONE$' <<< "$output")" == "$expected_runs" ]] || fail "post-hooks did not finish once per shutdown"
-    if grep -Eq 'Main process did not exit|post-script: .*failed|NiFi JVM is still running' <<< "$output"; then
+    if grep -Eq 'sending SIGKILL|post-script: .*failed|NiFi JVM is still running' <<< "$output"; then
         fail "NiFi shutdown required escalation or post-hooks failed"
     fi
+    local events expected="" i
+    events=$(docker cp "$CID:/kubedoop/run/nifi-events" - | tar -xO | tr '\n' ',')
+    for ((i=0;i<expected_runs;i++)); do expected+=PRE,POST,; done
+    [[ "$events" == "$expected" ]] || fail "hook order/count changed: $events"
+}
+
+test_cli_deadlines() {
+    local mode pid rc expected
+    for mode in normal ignore-term; do
+        rc=0
+        pid=$(timeout --kill-after=2 12 docker exec -i "$CID" timeout --kill-after=2 1 bash -c '
+            if [[ "$1" == ignore-term ]]; then trap "" TERM; fi
+            echo $$
+            exec sleep 60
+        ' bash "$mode") || rc=$?
+        expected=124
+        [[ "$mode" != ignore-term ]] || expected=137
+        [[ "$rc" == "$expected" && "$pid" =~ ^[1-9][0-9]*$ ]] || fail "CLI deadline failed ($mode, status $rc)"
+        docker exec "$CID" bash -c '! kill -0 "$1" 2>/dev/null' bash "$pid" || fail "timed-out CLI remained running ($mode)"
+    done
+    echo 'ok - container CLI deadlines terminate normal and SIGTERM-ignoring commands'
 }
 
 for runtime_user in root kubedoop; do
@@ -69,19 +92,23 @@ for runtime_user in root kubedoop; do
         -t "$TEST_IMAGE" "${SCRIPT_DIR}/fixtures" >/dev/null || fail "failed to build NiFi test image"
     # No command override: use the production default foreground nifi.sh run.
     CID=$(docker run -d "$TEST_IMAGE") || fail "failed to start NiFi"
-    wait_for_server
-    check_foreground_jvm
-    root_before=$(api ready) || fail "failed to read root process group"
-    group=$(api create) || fail "failed to create process group"
-    [[ "$(api check "$group")" == "$group" ]] || fail "created group could not be read"
-    stop_and_check 1
-    docker start "$CID" >/dev/null || fail "failed to restart NiFi"
-    wait_for_server
-    check_foreground_jvm
-    [[ "$(api ready)" == "$root_before" ]] || fail "restart changed root process group identity"
-    [[ "$(api check "$group")" == "$group" ]] || fail "restart lost persisted process group"
-    stop_and_check 2 INT
-    docker rm "$CID" >/dev/null
-    CID=""
-    echo "ok - NiFi default CMD serves the API, persists a flow group and handles TERM/INT shutdown as $runtime_user"
+    CONTAINER_IDS+=("$CID")
+    for cycle in 1 2 3; do
+        wait_for_server
+        [[ $(docker exec "$CID" cat /proc/1/comm) == tini ]] || fail 'Tini PID1 changed'
+        check_foreground_jvm
+        if [[ "$cycle" == 1 ]]; then
+            test_cli_deadlines
+            root_before=$(api ready) || fail "failed to read root process group"
+            group=$(api create) || fail "failed to create process group"
+        fi
+        [[ "$(api ready)" == "$root_before" ]] || fail "restart changed root process group identity"
+        [[ "$(api check "$group")" == "$group" ]] || fail "restart lost persisted process group"
+        signal=TERM
+        [[ "$cycle" != 2 ]] || signal=INT
+        [[ "$cycle" != 3 ]] || signal=stop
+        stop_and_check "$cycle" "$signal"
+        if [[ "$cycle" -lt 3 ]]; then docker start "$CID" >/dev/null || fail "failed to restart NiFi"; fi
+    done
+    echo "ok - $runtime_user NiFi default CMD API/persistence, three same-CID starts, TERM/INT/stop, unchanged root/group identity and exact hooks"
 done

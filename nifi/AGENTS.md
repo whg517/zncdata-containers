@@ -30,6 +30,7 @@ See `versions.yaml` for current values. Structure:
 - `kubedoop/bin/entrypoint.sh` and `kubedoop/lib/` — independently vendored universal lifecycle management, with diagnostics on stderr
 - `tests/source-entrypoint-framework.sh` and `tests/image-entrypoint-framework.sh` — lifecycle, signal, hook, stdio and directory-protection regressions
 - `tests/image-nifi-lifecycle.sh` — real REST API, persisted process group, graceful shutdown and restart with test-only loopback configuration
+- Managed commands own a separate session/group drained before post-hooks. Shutdown timer cancellation and reaping precede ALRM handler removal; root and UID1001 must pass three same-container starts with TERM/INT/stop, persistent API state and exact PRE/POST order.
 
 ## Dependencies
 - Uses at build time: java-devel

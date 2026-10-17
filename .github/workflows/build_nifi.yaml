@@ -59,6 +59,7 @@ jobs:
     needs:
       - product-shard
     strategy:
+      fail-fast: false
       matrix:
         version: ${{fromJson(needs.product-shard.outputs.versions)}}
         arch: [amd64, arm64]
@@ -107,6 +108,7 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/nifi:${{ matrix.version }}-kubedoop${{ env.KUBEDOOP_VERSION }}-${{ matrix.arch }}
         run: |
           nifi/tests/source-entrypoint-framework.sh
+          sudo bash nifi/tests/source-entrypoint-framework.sh
           nifi/tests/image-entrypoint-framework.sh "$IMAGE"
           nifi/tests/image-nifi-lifecycle.sh "$IMAGE"
 

@@ -69,7 +69,7 @@ wait_for_log() {
     local elapsed=0
 
     while [[ $elapsed -lt $timeout ]]; do
-        if docker logs "$cid" 2>&1 | grep -Fq "$pattern"; then
+        if docker logs "$cid" 2>&1 | grep -F "$pattern" >/dev/null; then
             return 0
         fi
         sleep 1
@@ -116,6 +116,7 @@ test_runtime_files_and_user() {
     docker run --rm --user kubedoop --entrypoint /bin/bash "$IMAGE" -c '
         set -euo pipefail
         test "$(id -un)" = "kubedoop"
+        command -v setsid
         test -x /usr/bin/tini
         test -x /kubedoop/bin/entrypoint.sh
         test -x /kubedoop/lib/log.sh
@@ -142,6 +143,17 @@ test_runtime_files_and_user() {
     pass "runtime files, ownership, and kubedoop user are valid"
 }
 
+test_runtime_source_hashes() {
+    local file expected actual
+    for file in bin/entrypoint.sh lib/log.sh lib/run.sh lib/signal.sh; do
+        expected=$(sha256sum "$PRODUCT_DIR/kubedoop/$file" | awk '{print $1}')
+        actual=$(docker run --rm --entrypoint sha256sum "$IMAGE" "/kubedoop/$file" | awk '{print $1}')
+        [[ $actual == "$expected" ]] || fail "stale runtime source $file"
+    done
+    pass 'installed runtime sources match the tested worktree'
+}
+
+
 test_exit_code_propagation() {
     run_expect_status 7 docker run --rm "$IMAGE" bash -c 'exit 7'
     run_expect_status 127 docker run --rm "$IMAGE" bash -c 'exit 127'
@@ -167,6 +179,8 @@ test_main_stdin_is_preserved() {
     [[ "$output" == TEST_MAIN_STDIN ]] || fail "main stdin/stdout was changed by the entrypoint"
     output=$(docker run --rm -e KUBEDOOP_DEBUG=true "$IMAGE" bash -c 'printf "%s\\n" "{\"value\":42}"') || fail "structured stdout test failed"
     [[ "$output" == '{"value":42}' ]] || fail "framework diagnostics polluted structured stdout"
+    output=$(printf '%s\n' KUBEDOOP_STDIN | docker run --rm -i --user kubedoop "$IMAGE" cat) || fail 'kubedoop stdin failed'
+    [[ "$output" == KUBEDOOP_STDIN ]] || fail 'kubedoop stdout changed'
     pass "main stdin and structured stdout are preserved"
 }
 
@@ -190,6 +204,12 @@ test -f /kubedoop/run/pre-script-marker || exit 1
 if [[ "${TEST_FAIL_POST:-false}" == true ]]; then exit 23; fi
 if [[ "${TEST_REQUIRE_CHILD_CLEANUP:-false}" == true ]]; then
     test -f /kubedoop/run/child-cleanup-done || exit 1
+fi
+if [[ "${TEST_REQUIRE_GROUP_CLEANUP:-false}" == true ]]; then
+    source /kubedoop/lib/signal.sh
+    group=$(cat /kubedoop/run/main-group)
+    [[ "$group" =~ ^[1-9][0-9]*$ ]] || exit 1
+    if _group_has_live_processes "$group"; then exit 1; fi
 fi
 if [[ "${TEST_WAIT_POST:-false}" == true ]]; then
     echo TEST_POST_STARTED
@@ -352,6 +372,38 @@ test_arguments_are_not_logged() {
     pass "command arguments are omitted from framework logs, including debug mode"
 }
 
+test_descendants_after_normal_exit() {
+    local mode="$1" cid output
+    cid=$(docker run -d -e KUBEDOOP_KILL_TIMEOUT=1 -e TEST_REQUIRE_GROUP_CLEANUP=true \
+        "$TEST_IMAGE" bash -c '
+            echo "$$" > /kubedoop/run/main-group
+            bash -c '\''
+                if [[ "$1" == ignore ]]; then
+                    trap "" TERM
+                else
+                    trap "touch /kubedoop/run/descendant-term; exit 42" TERM
+                fi
+                touch /kubedoop/run/descendant-ready
+                while :; do sleep 0.05; done
+            '\'' bash "$1" &
+            while [[ ! -e /kubedoop/run/descendant-ready ]]; do sleep 0.05; done
+            exit 7
+        ' bash "$mode") || fail 'descendant test startup'
+    CONTAINER_IDS+=("$cid")
+    output=$(timeout 8 docker wait "$cid") || fail 'descendant drain was unbounded'
+    [[ $output == 7 ]] || fail 'descendant cleanup changed main status7'
+    output=$(docker logs "$cid" 2>&1)
+    [[ $(grep -xc TEST_POST_SCRIPT_RAN <<< "$output") == 1 ]] || fail 'post ran before descendant drain or not exactly once'
+    if [[ $mode == ignore ]]; then
+        assert_contains "$output" 'Main process group did not exit' 'TERM-ignoring descendant was not escalated'
+    else
+        docker cp "$cid:/kubedoop/run/descendant-term" "$TMP_DIR/descendant-term" >/dev/null || fail 'descendant did not receive TERM'
+        if grep -Fq 'sending SIGKILL' <<< "$output"; then fail 'graceful descendant was forcibly killed'; fi
+    fi
+    pass "$mode descendant stops before post-hook after normal main exit"
+}
+
+
 test_link_target_permissions() {
     docker run --rm --user root --entrypoint /bin/bash "$IMAGE" -c '
         set -euo pipefail
@@ -377,6 +429,7 @@ cd "$REPO_DIR" || fail "failed to enter repository directory: $REPO_DIR"
 test_image_exists
 test_entrypoint_metadata
 test_runtime_files_and_user
+test_runtime_source_hashes
 test_exit_code_propagation
 test_init_reaps_orphans
 test_main_stdin_is_preserved
@@ -384,8 +437,11 @@ test_root_owned_scripts_execute
 test_hook_failure_behavior
 test_sigterm_is_forwarded
 test_sigterm_is_forwarded 127
+test_sigterm_is_forwarded 142
 test_sigkill_after_timeout
 test_signals_during_cleanup signal
 test_signals_during_cleanup normal
+test_descendants_after_normal_exit graceful
+test_descendants_after_normal_exit ignore
 test_arguments_are_not_logged
 test_link_target_permissions

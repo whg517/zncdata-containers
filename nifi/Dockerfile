@@ -114,6 +114,7 @@ RUN <<EOF
         gettext \
         git \
         python3-pip \
+        util-linux-core \
 
     microdnf clean all
     rm -rf /var/cache/yum

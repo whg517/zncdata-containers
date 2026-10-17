@@ -27,3 +27,4 @@ sed -i -e 's/^java.arg.2=.*/java.arg.2=-Xms512m/' \
     -e 's/^java.arg.3=.*/java.arg.3=-Xmx1g/' "${NIFI_HOME}/conf/bootstrap.conf"
 test -w "${NIFI_HOME}/conf"
 echo TEST_NIFI_PRE_READY
+echo PRE >> /kubedoop/run/nifi-events

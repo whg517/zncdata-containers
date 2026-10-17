@@ -42,13 +42,22 @@ The real-application suite uses a disposable derived image with test-only
 loopback HTTP and reduced heap configuration. Production TLS/auth defaults are
 unchanged. It runs the unchanged default CMD, queries the actual REST API,
 creates a process group, stops without escalation, checks the JVM is gone before
-the post-hook, restarts the same container, and verifies root identity and the
+the post-hook, starts the same container three times, and verifies root identity and the
 created group survived, under both root and kubedoop users. It uses no host
 ports, volumes or external services.
 HTTP timeouts are enforced inside the container, with a longer host watchdog.
-The first stop uses Docker's SIGTERM path; after restart the suite sends SIGINT.
-Both initiate the framework's documented SIGTERM-based graceful main-process
+The three stops use explicit SIGTERM, SIGINT and docker stop.
+Each initiates the framework's documented SIGTERM-based graceful main-process
 shutdown, preserving the actual JVM status and running post-hooks once.
 
 CI runs source and both image suites on native amd64 and arm64 for every
 supported version. State the actual platform when reporting local results.
+
+Owned live process groups must drain before post-hooks even when the main
+process exits normally. Timer cancellation/reaping must precede ALRM handler
+removal; a deterministic TERM-resistant timer regression preserves status 42,
+while a real application status 142 is also retained. Image regressions compare
+installed runtime hashes, require setsid, and exercise graceful/TERM-ignoring
+descendants. The real API suite also requires exact PRE/POST ordering and
+container-side deadlines for normal and TERM-ignoring commands. Cleanup removes
+only disposable containers/images created by the current test, never user data.

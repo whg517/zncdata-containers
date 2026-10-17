@@ -9,3 +9,4 @@ for cmdline in /proc/[0-9]*/cmdline; do
 done
 test -s "${NIFI_HOME}/conf/flow.json.gz"
 echo TEST_NIFI_POST_DONE
+echo POST >> /kubedoop/run/nifi-events
